@@ -126,7 +126,7 @@ original launcher and bundle; this MVP refuses in-place appliance upgrades.
 Builds, Go tests and packaging run in **GitHub Actions**. The `Build Containers
 Anywhere MVP` workflow builds both appliances and all four desktop packages.
 Linux AMD64 acceptance boots QEMU/KVM, creates a Kite administrator, deploys a
-PVC-backed web pod via Kite, verifies HTTP access, reboots, and repeats after an
+PVC-backed web Deployment via Kite, verifies HTTP access, reboots, and repeats after an
 encrypted backup/restore. Windows runs equivalent boot/restart checks under TCG.
 Physical Windows WHPX, Linux ARM64 KVM and local macOS boot still need hardware
 acceptance; successful cross-compilation does not establish those results.
@@ -174,3 +174,6 @@ management origin. Download hashes authenticate against the launcher build;
 publisher-signed update channels and notarized/signed installers remain release
 hardening work. Exact download sizes and idle resource use must be measured from
 the resulting artifacts, not inferred from source.
+
+Use Deployments or StatefulSets for long-running workloads: Kubernetes graceful
+node shutdown terminates bare Pods, and only controllers recreate them after boot.

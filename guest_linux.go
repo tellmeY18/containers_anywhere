@@ -38,6 +38,18 @@ func guestMain() error {
 		cmd := exec.CommandContext(r.Context(), "journalctl", "--no-pager", "-n", "200", "-u", "k3s", "-u", "kite-secrets", "-u", "kite-forward", "-u", "containers-agent")
 		cmd.Stdout, cmd.Stderr = w, w
 		_ = cmd.Run()
+		// Journals alone miss terminal pod states and service endpoints. Fixed,
+		// read-only queries keep failures diagnosable without a shell endpoint.
+		for _, args := range [][]string{
+			{"get", "nodes,pods,pvc,svc,endpointslices", "-A", "-o", "wide"},
+			{"get", "events", "-A", "--sort-by=.lastTimestamp"},
+		} {
+			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			cmd := exec.CommandContext(ctx, "k3s", append([]string{"kubectl", "--kubeconfig=/etc/rancher/k3s/k3s.yaml"}, args...)...)
+			cmd.Stdout, cmd.Stderr = w, w
+			_ = cmd.Run()
+			cancel()
+		}
 	})
 	mux.HandleFunc("GET /_agent/status", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)

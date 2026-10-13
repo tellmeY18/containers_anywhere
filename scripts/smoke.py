@@ -47,6 +47,7 @@ def main():
     binary, bundle, state = args.binary.resolve(), args.bundle.resolve(), args.state.resolve()
     state.mkdir()  # Never use existing user data.
     admin = {"username": "mvptest", "password": secrets.token_urlsafe(24), "enableAnalytics": False}
+    marker = None
     timeout = int(os.environ.get("CONTAINERS_SMOKE_BOOT_SECONDS", "600"))
 
     def boot(directory, fresh=False):
@@ -75,16 +76,25 @@ def main():
                 resources = [
                     {"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": {"name": "mvp-data", "namespace": "default"},
                      "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "64Mi"}}}},
-                    {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "mvp-web", "namespace": "default", "labels": {"app": "mvp-web"}},
-                     "spec": {"containers": [{"name": "web", "image": "busybox:1.37.0", "command": ["sh", "-c", "test -f /www/index.html || echo containers-anywhere-persistent > /www/index.html; exec httpd -f -p 8080 -h /www"],
-                                              "ports": [{"containerPort": 8080}], "volumeMounts": [{"name": "data", "mountPath": "/www"}]}],
-                              "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "mvp-data"}}]}},
+                    # Graceful node shutdown terminates Pods. A controller must
+                    # recreate them after reboot; a bare Pod is not a service.
+                    {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "mvp-web", "namespace": "default"},
+                     "spec": {"replicas": 1, "strategy": {"type": "Recreate"}, "selector": {"matchLabels": {"app": "mvp-web"}},
+                              "template": {"metadata": {"labels": {"app": "mvp-web"}},
+                                           "spec": {"containers": [{"name": "web", "image": "busybox:1.37.0", "command": ["sh", "-c", "test -f /www/index.html || cat /proc/sys/kernel/random/uuid > /www/index.html; exec httpd -f -p 8080 -h /www"],
+                                                                    "ports": [{"containerPort": 8080}], "volumeMounts": [{"name": "data", "mountPath": "/www"}]}],
+                                                    "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "mvp-data"}}]}}}},
                     {"apiVersion": "v1", "kind": "Service", "metadata": {"name": "mvp-web", "namespace": "default"},
                      "spec": {"selector": {"app": "mvp-web"}, "ports": [{"port": 8080, "targetPort": 8080}]}},
                 ]
                 for resource in resources:
                     request(c["AppURL"]+"/api/v1/resources/apply", data={"yaml": json.dumps(resource), "namespace": "default"}, opener=browser)
-            wait_for(lambda: b"containers-anywhere-persistent" in request(c["AppURL"]+"/api/v1/namespaces/default/services/mvp-web:8080/proxy/", opener=browser), process, timeout)
+            nonlocal marker
+            observed = wait_for(lambda: request(c["AppURL"]+"/api/v1/namespaces/default/services/mvp-web:8080/proxy/", opener=browser), process, timeout)
+            if fresh:
+                marker = observed
+            else:
+                assert observed == marker, "PVC contents changed after reboot/restore"
             print("PASS: Kite auth, local cluster, workload HTTP and persistent volume", flush=True)
         finally:
             if c and process.poll() is None:
