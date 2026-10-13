@@ -13,12 +13,10 @@ import (
 func TestQEMUDiskArgs(t *testing.T) {
 	for _, c := range []struct {
 		name          string
-		format        int
 		bundle, state string
 	}{
-		{"legacy", 1, "bundle", "state"},
-		{"layered", 2, "bundle", "state"},
-		{"escaped paths", 2, "bundle, with spaces", "state, with spaces"},
+		{"appliance", "bundle", "state"},
+		{"escaped paths", "bundle, with spaces", "state, with spaces"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			bundle, state := c.bundle, c.state
@@ -26,20 +24,12 @@ func TestQEMUDiskArgs(t *testing.T) {
 				bundle, state = "bundle,, with spaces", "state,, with spaces"
 			}
 			want := []string{
-				"-drive", "file=" + filepath.Join(bundle, "system.img") + ",format=raw,if=none,id=care-base,readonly=on",
-				"-device", "virtio-blk-pci,drive=care-base,serial=care-base",
-				"-drive", "file=" + filepath.Join(state, "data.img") + ",format=raw,if=none,id=care-data,discard=unmap",
-				"-device", "virtio-blk-pci,drive=care-data,serial=care-data",
+				"-drive", "file=" + filepath.Join(bundle, "system.img") + ",format=raw,if=none,id=ca-base,readonly=on",
+				"-device", "virtio-blk-pci,drive=ca-base,serial=ca-base",
+				"-drive", "file=" + filepath.Join(state, "data.img") + ",format=raw,if=none,id=ca-data,discard=unmap",
+				"-device", "virtio-blk-pci,drive=ca-data,serial=ca-data",
 			}
-			if c.format == 2 {
-				want = append(want,
-					"-drive", "file="+filepath.Join(bundle, "runtime.img")+",format=raw,if=none,id=care-runtime,readonly=on",
-					"-device", "virtio-blk-pci,drive=care-runtime,serial=care-runtime",
-					"-drive", "file="+filepath.Join(bundle, "app.img")+",format=raw,if=none,id=care-app,readonly=on",
-					"-device", "virtio-blk-pci,drive=care-app,serial=care-app",
-				)
-			}
-			if got := qemuDiskArgs(c.bundle, c.state, c.format); !reflect.DeepEqual(got, want) {
+			if got := qemuDiskArgs(c.bundle, c.state); !reflect.DeepEqual(got, want) {
 				t.Fatalf("disk arguments:\n got %q\nwant %q", got, want)
 			}
 		})

@@ -3,8 +3,7 @@
 `internal/atomicfile` adapts CARE Clinic's atomic replacement and Windows private
 file ACL implementation from `app/internal/sys/atomicfile`.
 `internal/diskspace` adapts its nearest-existing-directory and filesystem capacity
-checks. `nix/buckets.py` ports its bucket initialization and public facility download
-policy from `deployments/minio/entrypoint.sh` to the native Python runtime.
+checks.
 Source: https://github.com/ohcnetwork/care_clinic (main, retrieved 2026-10-04).
 The original API and durability ordering are retained, with platform files combined.
 
@@ -40,19 +39,16 @@ Other components retain their own licenses. Distributing appliance images or
 QEMU/Firecracker helpers requires their corresponding notices and source-offer
 obligations, independent of the launcher license.
 
-# CARE Clinic desktop frontend and CARE Onboarding
+# K3s and Kite
 
-`frontend/` is adapted from `ohcnetwork/care_clinic` (MIT), source snapshot
-`de9d492407c6004e7aae33d5f40c9d6459c65fea`. The React components, setup layout,
-administrator form, control panel, backup list, storage views, typography and
-styles are reused. The Wails bridge is adapted to the loopback VM control API;
-container-only and unavailable alpha operations are not exposed.
+The guest redistributes K3s (Apache-2.0), containerd and Kubernetes components
+under their respective licenses. Source versions are pinned by flake.lock/nixpkgs.
+Kite v0.16.0 (Apache-2.0) is redistributed as its unmodified, checksum-pinned
+Linux binary with embedded UI inside a locally assembled container image.
+Source and license: https://github.com/kite-org/kite/tree/v0.16.0.
+`nix/kite.yaml` adapts Kite's deployment manifest for persistent local storage,
+generated secrets and the preloaded image.
 
-CARE Onboarding is built without source modifications from
-`ohcnetwork/care_onboarding_fe` commit
-`d78c2f177d281f8b27370e8c9f04571a70fcba08` (MIT) and hosted locally in the package.
-Its source, data provenance, and license are at
-https://github.com/ohcnetwork/care_onboarding_fe/tree/d78c2f177d281f8b27370e8c9f04571a70fcba08.
 # Bundled QEMU
 
 Linux packages redistribute Ubuntu's QEMU and shared-library packages with their

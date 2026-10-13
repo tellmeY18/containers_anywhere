@@ -1,38 +1,24 @@
-name: Publish CARE Anywhere alpha
-
+name: Prepare Containers Anywhere release
 on:
   workflow_dispatch:
     inputs:
       build_run_id:
-        description: 'Successful main-branch alpha build run ID (all platforms from this run)'
-        type: string
+        description: Successful Containers Anywhere MVP build run
         required: true
-      publish:
-        description: 'Publish after verification; false prepares a complete draft'
-        type: boolean
-        default: false
-
+        type: string
 permissions:
   actions: read
   contents: write
-
-concurrency:
-  group: release-${{ inputs.build_run_id }}
-  cancel-in-progress: false
-
 jobs:
   release:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/containers-anywhere'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.13'
-      - name: Verify build, stage assets, and prepare or publish prerelease
-        env:
+      - env:
           GH_TOKEN: ${{ github.token }}
           BUILD_RUN_ID: ${{ inputs.build_run_id }}
-          PUBLISH: ${{ inputs.publish }}
-        run: python scripts/release.py publish --run-id "$BUILD_RUN_ID"
+        run: python scripts/release.py --run-id "$BUILD_RUN_ID"

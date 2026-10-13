@@ -28,16 +28,17 @@ func bootVM(bundle, state string, m manifest) (machine, error) {
 	if e != nil {
 		return nil, e
 	}
-	cfg, e := vz.NewVirtualMachineConfiguration(boot, 2, 4<<30)
+	cpus, memory, e := vmResources()
+	if e != nil {
+		return nil, e
+	}
+	cfg, e := vz.NewVirtualMachineConfiguration(boot, uint(cpus), uint64(memory)<<20)
 	if e != nil {
 		return nil, e
 	}
 	var disks []vz.StorageDeviceConfiguration
 	paths := []string{filepath.Join(bundle, "system.img"), filepath.Join(state, "data.img")}
-	ids := []string{"care-base", "care-data", "care-runtime", "care-app"}
-	if m.Format == 2 {
-		paths = append(paths, filepath.Join(bundle, "runtime.img"), filepath.Join(bundle, "app.img"))
-	}
+	ids := []string{"ca-base", "ca-data"}
 	for i, p := range paths {
 		a, e := vz.NewDiskImageStorageDeviceAttachment(p, i != 1)
 		if e != nil {
@@ -63,12 +64,8 @@ func bootVM(bundle, state string, m manifest) (machine, error) {
 		return nil, e
 	}
 	cfg.SetSocketDevicesVirtualMachineConfiguration([]vz.SocketDeviceConfiguration{socket})
-	// Local-first, not offline: clinic data, compute and storage stay on this
-	// computer, and control/browser traffic still goes over vsock — but the
-	// guest gets outbound-only NAT internet by default so features that need
-	// it (e.g. SNOMED lookups via the Snowstorm terminology server) work.
-	// CARE_NO_NETWORK=1 disables this NIC for offline testing/diagnosis.
-	if os.Getenv("CARE_NO_NETWORK") != "1" {
+	// Outbound NAT permits workload image pulls; control stays on vsock.
+	if os.Getenv("CONTAINERS_NO_NETWORK") != "1" {
 		nat, e := vz.NewNATNetworkDeviceAttachment()
 		if e != nil {
 			return nil, e

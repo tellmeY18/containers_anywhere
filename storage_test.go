@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -58,23 +56,11 @@ func TestBackupRoundTripAndRefuseOverwrite(t *testing.T) {
 }
 
 func TestBundleVerifiesAdditionalRuntime(t *testing.T) {
-	root := t.TempDir()
-	m := manifest{Version: "test", Arch: runtime.GOARCH, System: "/nix/store/test", Kernel: "kernel", Initrd: "initrd", Files: map[string]string{}}
-	for _, name := range []string{"kernel", "initrd", "system.img", "data.img", "firecracker"} {
-		b := []byte(name)
-		sum := sha256.Sum256(b)
-		m.Files[name] = hex.EncodeToString(sum[:])
-		if err := os.WriteFile(filepath.Join(root, name), b, 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := saveJSON(filepath.Join(root, "manifest.json"), m); err != nil {
-		t.Fatal(err)
-	}
+	root, m := testBundle(t)
 	if _, err := verifyBundle(root); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "firecracker"), []byte("tampered"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "system.img"), []byte("tampered"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := verifyBundle(root); err == nil {
@@ -86,6 +72,16 @@ func TestBundleVerifiesAdditionalRuntime(t *testing.T) {
 	}
 	if _, err := verifyBundle(root); err == nil {
 		t.Fatal("accepted additional path traversal")
+	}
+}
+
+func TestRestoreRefusesUnrelatedExistingFiles(t *testing.T) {
+	state := t.TempDir()
+	if err := os.WriteFile(filepath.Join(state, "important.txt"), []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := restore(state, "unused.age", "unused.key"); err == nil || err.Error() != "restore requires an empty destination" {
+		t.Fatal(err)
 	}
 }
 

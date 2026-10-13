@@ -1,321 +1,134 @@
-name: Build CARE Anywhere alpha
-
+name: Build Containers Anywhere MVP
 on:
   workflow_dispatch:
   push:
-    branches: [main]
-    paths-ignore: ['**/*.md']
+    branches: [containers-anywhere]
   pull_request:
-    paths-ignore: ['**/*.md']
-
 permissions:
   contents: read
-  actions: read
-
 concurrency:
-  group: alpha-${{ github.event_name }}-${{ github.ref }}
+  group: containers-${{ github.ref }}
   cancel-in-progress: false
-
 jobs:
   checks:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Assign immutable build version
-        id: version
-        run: python3 scripts/release.py version --number "$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: go.mod
       - run: test -z "$(gofmt -l *.go)" && go vet ./... && go test -race ./...
-      - name: Compile Windows launcher early
-        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/care-anywhere.exe .
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.13'
-      - run: npm --prefix frontend ci --ignore-scripts
-      - name: Check smoke test HTTP diagnostics
-        run: python scripts/test-smoke.py
-      - name: Test release validation and retry safety
-        run: python -m unittest discover -s scripts -p 'test_release.py'
-      - run: npm --prefix frontend run build
-      - name: Test reused UI against appliance adapter
-        working-directory: frontend
-        run: |
-          npx playwright install --with-deps chromium
-          npm run test:ui
-      - run: python scripts/build-onboarding.py
-      - name: Archive complete offline interfaces
-        run: tar -czf interfaces.tar.gz frontend/dist dist/onboarding
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: offline-interfaces
-          path: interfaces.tar.gz
-          if-no-files-found: error
-          overwrite: true
-          compression-level: 0
-          retention-days: 14
-
+      - run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/containers-anywhere.exe .
+      - run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - id: version
+        run: echo "version=$(cat VERSION)-mvp.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
   appliance:
     if: github.event_name != 'pull_request'
     needs: checks
     name: appliance-${{ matrix.arch }}
-    env:
-      CARE_RELEASE_VERSION: ${{ needs.checks.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04
-            system: x86_64-linux
-            arch: amd64
-          - runner: ubuntu-24.04-arm
-            system: aarch64-linux
-            arch: arm64
+          - {runner: ubuntu-24.04, system: x86_64-linux, arch: amd64}
+          - {runner: ubuntu-24.04-arm, system: aarch64-linux, arch: arm64}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Make room on disposable GitHub runner
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h
-      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
         with:
-          extra_nix_config: |
-            max-jobs = 2
-            cores = 2
-      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
-        with:
-          primary-key: nix-${{ matrix.system }}-${{ hashFiles('flake.lock', 'nix/**', '*.go', 'go.*') }}
-          restore-prefixes-first-match: nix-${{ matrix.system }}-
+          primary-key: ca-nix-${{ matrix.system }}-${{ hashFiles('flake.lock', 'nix/**', '*.go', 'go.*') }}
+          restore-prefixes-first-match: ca-nix-${{ matrix.system }}-
           gc-max-store-size-linux: 6000000000
-      - name: Build offline appliance
-        id: bundle
+      - name: Build preloaded K3s and Kite appliance
         env:
           SYSTEM: ${{ matrix.system }}
-        run: |
-          # Nix builds are incremental: a retry after a transient failure (flaky
-          # registry fetch, interrupted download) reuses every derivation that
-          # already succeeded and only redoes the one that failed.
-          attempt=1
-          until bundle=$(nix build ".#packages.$SYSTEM.bundle" --no-update-lock-file --no-link --print-out-paths); do
-            attempt=$((attempt + 1))
-            if [ "$attempt" -gt 3 ]; then
-              echo "::error::nix build failed after 3 attempts" >&2
-              exit 1
-            fi
-            echo "::warning::nix build failed (attempt $((attempt - 1))); retrying in 30s" >&2
-            sleep 30
-          done
-          echo "path=$bundle" >> "$GITHUB_OUTPUT"
-          mkdir -p dist
-          tar -czf dist/appliance.tar.gz -C "$bundle" manifest.json kernel initrd system.img runtime.img app.img data.img
-      - name: Stage independently downloadable OTA layers and size report
-        env:
-          BUNDLE: ${{ steps.bundle.outputs.path }}
           ARCH: ${{ matrix.arch }}
         run: |
-          python3 - <<'PY'
-          import hashlib, json, os, pathlib, shutil
-          root = pathlib.Path(os.environ['BUNDLE'])
-          dest = pathlib.Path('dist/ota')
-          dest.mkdir()
-          manifest = json.loads((root / 'manifest.json').read_text())
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write('## Layer sizes (' + os.environ['ARCH'] + ')\n\n| File | Bytes |\n| --- | ---: |\n')
-              for name in ['manifest.json', *manifest['files']]:
-                  target = dest / (os.environ['ARCH'] + '-' + name)
-                  shutil.copyfile(root / name, target)
-                  summary.write(f'| {name} | {target.stat().st_size} |\n')
-                  digest = hashlib.file_digest(target.open('rb'), 'sha256').hexdigest()
-                  target.with_name(target.name + '.sha256').write_text(digest + '  ' + target.name + '\n')
-          PY
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ota-${{ matrix.arch }}
-          path: dist/ota/*
-          if-no-files-found: error
-          overwrite: true
-          compression-level: 0
-          retention-days: 14
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          bundle=$(nix build ".#packages.$SYSTEM.bundle" --no-update-lock-file --no-link --print-out-paths)
+          mkdir -p dist
+          python3 scripts/appliance.py "$bundle" "dist/appliance-$ARCH.tar.gz"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: appliance-${{ matrix.arch }}
-          path: dist/appliance.tar.gz
+          path: dist/appliance-*
           if-no-files-found: error
-          overwrite: true
           compression-level: 0
           retention-days: 14
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+  package:
+    needs: [checks, appliance]
+    name: package-${{ matrix.platform }}-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-24.04, platform: linux, arch: amd64}
+          - {runner: ubuntu-24.04-arm, platform: linux, arch: arm64}
+          - {runner: macos-latest, platform: macos, arch: arm64}
+          - {runner: windows-2025, platform: windows, arch: amd64}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      PYTHONUTF8: '1'
+      VERSION: ${{ needs.checks.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: go.mod
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.13'
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - run: go test -race ./...
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: offline-interfaces
-      - run: tar -xzf interfaces.tar.gz
-      - name: Install Linux packaging tools on CI
+          name: appliance-${{ matrix.arch }}
+          path: dist
+      - if: matrix.platform == 'linux'
         run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 qemu-system-arm squashfs-tools libfuse2t64
-      - name: Package complete Linux host
+      - name: Package launcher and separate runtime
+        shell: bash
         env:
-          BUNDLE: ${{ steps.bundle.outputs.path }}
-        run: python scripts/package.py linux --bundle "$BUNDLE"
-      - name: Real AppImage QEMU KVM boot, setup, restart, backup and restore
-        if: matrix.arch == 'amd64'
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+        run: python scripts/package.py "$PLATFORM" --arch "$ARCH" --version "$VERSION" --appliance "dist/appliance-$ARCH.tar.gz" --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/containers-v$VERSION"
+      - name: Linux KVM boot, Kite workload, restart and encrypted restore
+        if: matrix.platform == 'linux' && matrix.arch == 'amd64'
+        shell: bash
         run: |
           test -c /dev/kvm
           sudo chmod a+rw /dev/kvm
-          rm -rf dist/releases/stage-linux-amd64
-          # Exercise the shipped AppImage and bundled QEMU, not the staging tree.
-          cd dist
-          releases/*.AppImage --appimage-extract
-          cd ..
-          python scripts/smoke.py --binary dist/squashfs-root/care-anywhere --bundle dist/squashfs-root/bundle --state dist/ci-smoke --restore --cleanup
-      - name: Collect Linux failure diagnostics
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: linux-${{ matrix.arch }}-diagnostics
-          overwrite: true
-          path: |
-            dist/ci-smoke/*.log
-            dist/ci-smoke-restored/*.log
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: linux-${{ matrix.arch }}
-          if-no-files-found: error
-          overwrite: true
-          path: |
-            dist/releases/*.AppImage
-            dist/releases/*.sha256
-          compression-level: 0
-          retention-days: 14
-
-  macos:
-    needs: [checks, appliance]
-    env:
-      CARE_RELEASE_VERSION: ${{ needs.checks.outputs.version }}
-    runs-on: macos-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.13'
-      - run: go vet ./... && go test -race ./...
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: appliance-arm64
-          path: dist
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: offline-interfaces
-      - name: Unpack appliance and interfaces
-        run: |
-          mkdir dist/bundle
-          tar -xzf dist/appliance.tar.gz -C dist/bundle
-          tar -xzf interfaces.tar.gz
-          rm dist/appliance.tar.gz
-      - name: Build and verify ad-hoc signed alpha DMG
-        run: python scripts/package.py macos --bundle dist/bundle
-      - name: Record macOS verification boundary
-        run: |
-          echo 'DMG checksums and app signature verified. GitHub ARM macOS runners cannot run nested Virtualization.framework guests. A local boot acceptance test is required before publishing.' >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: macos-arm64
-          if-no-files-found: error
-          overwrite: true
-          path: |
-            dist/releases/*.dmg
-            dist/releases/*.sha256
-          compression-level: 0
-          retention-days: 14
-
-  windows:
-    needs: [checks, appliance]
-    runs-on: windows-2025
-    timeout-minutes: 180
-    env:
-      CARE_RELEASE_VERSION: ${{ needs.checks.outputs.version }}
-      PYTHONUTF8: '1'
-      PYTHONIOENCODING: utf-8
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.13'
-      - name: Native Windows lifecycle and storage regression tests
-        run: |
-          python scripts/test-smoke.py
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          go vet ./...
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          go test -race ./...
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: appliance-amd64
-          path: dist
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: offline-interfaces
-      - name: Unpack appliance and interfaces
-        run: |
-          New-Item -ItemType Directory dist/bundle
-          tar -xzf dist/appliance.tar.gz -C dist/bundle
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          tar -xzf interfaces.tar.gz
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          Remove-Item dist/appliance.tar.gz
-      - name: Build complete offline Windows installer
-        run: python scripts/package.py windows --bundle dist/bundle
-      - name: Install and boot the actual Windows package
+          mkdir -p dist/acceptance/bundle dist/acceptance/qemu
+          tar -xzf dist/appliance-amd64.tar.gz -C dist/acceptance/bundle
+          tar -xzf dist/releases/runtime-linux-amd64.tar.gz -C dist/acceptance/qemu
+          python scripts/smoke.py --binary dist/releases/stage-linux-amd64/containers-anywhere/containers-anywhere --bundle dist/acceptance/bundle --state dist/smoke --restore
+      - name: Windows emulated VM boot and Kite acceptance
+        if: matrix.platform == 'windows'
+        shell: bash
         env:
-          CARE_QEMU_ACCEL: tcg
-          CARE_GUEST_DEBUG: '1'
-          CARE_SMOKE_BOOT_SECONDS: '1200'
+          CONTAINERS_QEMU_ACCEL: tcg
+          CONTAINERS_GUEST_DEBUG: '1'
+          CONTAINERS_SMOKE_BOOT_SECONDS: '1200'
         run: |
-          $installer = (Get-ChildItem dist/releases/*windows-amd64.exe).FullName
-          Remove-Item -Recurse -Force dist/bundle, dist/releases/stage-windows-amd64
-          $target = Join-Path $env:RUNNER_TEMP 'CARE Anywhere'
-          $p = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$target`"" -Wait -PassThru
-          if ($p.ExitCode) { throw "Installer failed: $($p.ExitCode)" }
-          # Hosted Windows lacks WHPX; exercise a real guest with explicit TCG.
-          python scripts/smoke.py --binary "$target/care-anywhere.exe" --bundle "$target/bundle" --state dist/ci-smoke --restore --cleanup
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Collect failure diagnostics
+          mkdir -p dist/acceptance/bundle dist/acceptance/qemu
+          tar -xzf dist/appliance-amd64.tar.gz -C dist/acceptance/bundle
+          tar -xzf dist/releases/runtime-windows-amd64.tar.gz -C dist/acceptance/qemu
+          python scripts/smoke.py --binary dist/releases/stage-windows-amd64/containers-anywhere/containers-anywhere.exe --bundle dist/acceptance/bundle --state dist/smoke
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: windows-diagnostics
-          overwrite: true
+          name: diagnostics-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/smoke*/*.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: package-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
-            dist/ci-smoke/*.log
-            dist/ci-smoke-restored/*.log
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: windows-amd64
+            dist/releases/Containers-Anywhere-*
+            dist/releases/runtime-*.tar.gz*
           if-no-files-found: error
-          overwrite: true
-          path: |
-            dist/releases/*windows-amd64.exe
-            dist/releases/*.sha256
           compression-level: 0
           retention-days: 14

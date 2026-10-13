@@ -15,33 +15,25 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 )
 
 type manifest struct {
-	Version         string            `json:"version"`
-	Arch            string            `json:"arch"`
-	Kernel          string            `json:"kernel"`
-	Initrd          string            `json:"initrd"`
-	System          string            `json:"system"`
-	Files           map[string]string `json:"files"`
-	Format          int               `json:"format,omitempty"`
-	BaseABI         int               `json:"base_abi,omitempty"`
-	RequiresBaseABI int               `json:"requires_base_abi,omitempty"`
-	Protocol        int               `json:"protocol,omitempty"`
-	MinHostProtocol int               `json:"min_host_protocol,omitempty"`
-	DataSchema      int               `json:"data_schema,omitempty"`
-	Migrates        bool              `json:"migrates"`
-	DataBytes       int64             `json:"data_bytes,omitempty"`
-	RequiresRuntime string            `json:"requires_runtime,omitempty"`
-	RequiresBase    string            `json:"requires_base,omitempty"`
-	hostRuntime     string
+	Product     string            `json:"product,omitempty"`
+	Version     string            `json:"version"`
+	Arch        string            `json:"arch"`
+	Kernel      string            `json:"kernel"`
+	Initrd      string            `json:"initrd"`
+	System      string            `json:"system"`
+	Files       map[string]string `json:"files"`
+	Format      int               `json:"format,omitempty"`
+	Protocol    int               `json:"protocol,omitempty"`
+	DataBytes   int64             `json:"data_bytes,omitempty"`
+	hostRuntime string
 }
 
 func main() {
@@ -63,16 +55,13 @@ func run() error {
 		return err
 	}
 	fs := flag.NewFlagSet(os.Args[1], flag.ContinueOnError)
-	state := fs.String("state", filepath.Join(home, "care-anywhere"), "clinic state directory")
-	bundle := fs.String("bundle", "", "unpacked appliance bundle")
-	port := fs.Int("port", 8484, "local control and clinic port")
-	file := fs.String("file", "", "backup file")
+	state := fs.String("state", filepath.Join(home, "containers-anywhere"), "cluster state directory")
+	bundle := fs.String("bundle", "", "trusted local bundle (default: download pinned appliance)")
+	port := fs.Int("port", 8484, "loopback Kite port; 0 chooses a free port")
+	file := fs.String("file", "", "encrypted backup file")
 	key := fs.String("key", "", "recovery identity file")
 	noOpen := fs.Bool("no-open", false, "do not open a browser")
-	trusted := fs.Bool("trust-local", false, "explicitly trust an unsigned local update bundle")
-	updateURL := fs.String("url", "", "HTTPS URL of an update manifest (download only)")
-	destination := fs.String("destination", "", "new empty state directory for update recovery")
-	if err := fs.Parse(os.Args[2:]); err != nil {
+	if err = fs.Parse(os.Args[2:]); err != nil {
 		return err
 	}
 	*state, err = filepath.Abs(*state)
@@ -90,58 +79,34 @@ func run() error {
 		return backup(*state, *file)
 	case "restore":
 		return restore(*state, *file, *key)
-	case "update-stage":
-		if !*trusted {
-			return errors.New("unsigned alpha updates require --trust-local; network activation awaits signing")
-		}
-		return stageUpdate(*state, *bundle)
-	case "update-status":
-		return updateStatus(*state)
-	case "update-fetch":
-		return fetchUpdate(*state, *updateURL)
-	case "update-recover":
-		return recoverUpdate(*state, *destination)
 	case "status", "stop", "logs":
 		c, err := readControl(*state)
 		if err != nil {
 			return err
 		}
 		method := "GET"
-		path := "/control/status"
-		if os.Args[1] == "logs" {
-			path = "/control/logs"
-		}
 		if os.Args[1] == "stop" {
 			method = "POST"
-			path = "/control/stop"
 		}
-		req, _ := http.NewRequest(method, c.URL+path, nil)
-		req.Header.Set("Authorization", "Bearer "+c.Token)
-		client := http.Client{Timeout: 150 * time.Second}
-		resp, err := client.Do(req)
-		if err != nil {
-			return err
+		b, err := controlCall(c, method, "/control/"+os.Args[1], nil, 160*time.Second)
+		if err == nil {
+			_, err = os.Stdout.Write(b)
 		}
-		defer resp.Body.Close()
-		if resp.StatusCode != 200 {
-			return fmt.Errorf("%s", resp.Status)
-		}
-		_, err = io.Copy(os.Stdout, resp.Body)
 		return err
 	default:
-		return errors.New("unknown command")
+		return errors.New("commands: desktop, serve, doctor, status, stop, logs, backup, restore")
 	}
 }
 
-type control struct{ URL, Token string }
+type control struct{ URL, Token, AppURL, AppToken string }
 
 func readControl(state string) (control, error) {
 	var c control
-	b, e := os.ReadFile(filepath.Join(state, "control.json"))
-	if e == nil {
-		e = json.Unmarshal(b, &c)
+	b, err := os.ReadFile(filepath.Join(state, "control.json"))
+	if err == nil {
+		err = json.Unmarshal(b, &c)
 	}
-	return c, e
+	return c, err
 }
 func randomToken() string {
 	b := make([]byte, 32)
@@ -151,23 +116,18 @@ func randomToken() string {
 	return hex.EncodeToString(b)
 }
 func saveJSON(path string, v any) error {
-	b, e := json.Marshal(v)
-	if e != nil {
-		return e
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
 	}
 	return atomicWrite(path, b, 0600)
 }
 
 func serve(state, bundle string, port int, noOpen bool) error {
-	if bundle == "" {
-		return errors.New("--bundle is required")
-	}
-	bundle, err := filepath.Abs(bundle)
-	if err != nil {
+	if _, _, err := vmResources(); err != nil {
 		return err
 	}
-	hostBundle := bundle
-	if err = os.MkdirAll(state, 0700); err != nil {
+	if err := os.MkdirAll(state, 0700); err != nil {
 		return err
 	}
 	unlock, err := lockState(state)
@@ -175,7 +135,17 @@ func serve(state, bundle string, port int, noOpen bool) error {
 		return err
 	}
 	defer unlock()
-	bundle, err = selectBundle(state, bundle)
+	if bundle == "" {
+		bundle, err = bootstrap(state, func(detail string) {
+			log.Print(detail)
+			_ = saveJSON(filepath.Join(state, "progress.json"), detail)
+		})
+		if err != nil {
+			return err
+		}
+	}
+	defer os.Remove(filepath.Join(state, "progress.json"))
+	bundle, err = filepath.Abs(bundle)
 	if err != nil {
 		return err
 	}
@@ -183,224 +153,97 @@ func serve(state, bundle string, port int, noOpen bool) error {
 	if err != nil {
 		return err
 	}
+	if m.Format != 3 || m.Product != "containers-anywhere" {
+		return errors.New("this launcher requires a Containers Anywhere bundle; CARE data cannot be migrated in place")
+	}
 	if m.Arch != runtime.GOARCH {
 		return fmt.Errorf("bundle architecture %s does not match %s", m.Arch, runtime.GOARCH)
 	}
-	m.hostRuntime = filepath.Join(filepath.Dir(hostBundle), "qemu")
+	m.hostRuntime = filepath.Join(filepath.Dir(bundle), "qemu")
 	if err = ensureData(state, bundle, m); err != nil {
 		return err
 	}
-	var release manifest
-	b, err := os.ReadFile(filepath.Join(state, "release.json"))
+	release, err := readManifest(filepath.Join(state, "release.json"))
 	if err != nil {
 		return err
 	}
-	if err = json.Unmarshal(b, &release); err != nil {
-		return err
-	}
 	if !compatibleData(release, m) {
-		return errors.New("this data belongs to a different release; in-place upgrades are not implemented")
+		return errors.New("cluster data requires its original bundle; automatic upgrades are not supported in this MVP")
 	}
-	if m.Format == 2 && bundleID(release) != bundleID(m) {
-		return errors.New("bundle changed; use update-stage --trust-local so a recovery snapshot precedes activation")
-	}
-	machine, err := bootVM(bundle, state, m)
+	_ = saveJSON(filepath.Join(state, "progress.json"), "Starting K3s and Kite…")
+	vm, err := bootVM(bundle, state, m)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if e := machine.Close(); e != nil {
-			log.Printf("Waiting for clinic shutdown; retaining the data lock: %v", e)
-			<-machine.Done()
+		if err := vm.Close(); err != nil {
+			log.Printf("Retaining data lock until VM exits: %v", err)
+			<-vm.Done()
 		}
 	}()
-	transport := &http.Transport{DialContext: machine.Dial, ResponseHeaderTimeout: 15 * time.Minute}
+	transport := &http.Transport{DialContext: vm.Dial, ResponseHeaderTimeout: 30 * time.Second}
 	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, Timeout: 15 * time.Minute}
+	client := &http.Client{Transport: transport, Timeout: 30 * time.Second}
 	target, _ := url.Parse("http://guest")
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.Transport = transport
-	// Guest agent management endpoints must never be forwarded without host auth.
-	token := randomToken()
-	address := fmt.Sprintf("127.0.0.1:%d", port)
-	clinicListener, err := net.Listen("tcp", address)
+	app, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		return err
 	}
-	defer clinicListener.Close()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	defer app.Close()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		return err
 	}
 	defer listener.Close()
-	c := control{URL: "http://" + listener.Addr().String(), Token: token}
+	c := control{URL: "http://" + listener.Addr().String(), Token: randomToken(), AppURL: "http://" + app.Addr().String(), AppToken: randomToken()}
 	if err = saveJSON(filepath.Join(state, "control.json"), c); err != nil {
 		return err
 	}
 	defer os.Remove(filepath.Join(state, "control.json"))
-	defer os.Remove(filepath.Join(state, "open.html"))
-	done := make(chan struct{})
-	var stop sync.Once
-	var mutation sync.Mutex
+	done := make(chan struct{}, 1)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/control/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Host != listener.Addr().String() {
-			http.Error(w, "invalid host", 403)
-			return
-		}
-		if r.URL.Path == "/control/" && r.Method == "GET" {
-			w.Header().Set("Content-Type", "text/html")
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'")
-			io.WriteString(w, strings.ReplaceAll(controlHTML, `href="/"`, `href="http://`+address+`/"`))
-			return
-		}
-		if r.Header.Get("Authorization") != "Bearer "+token {
+		if r.Host != listener.Addr().String() || r.Header.Get("Authorization") != "Bearer "+c.Token {
 			http.Error(w, "unauthorized", 401)
 			return
 		}
-		switch r.URL.Path {
-
-		case "/control/logs":
-			if r.Method != "GET" {
-				http.Error(w, "method", 405)
-				return
-			}
-			resp, e := client.Get("http://guest/logs")
-			if e != nil {
-				http.Error(w, e.Error(), 502)
-				return
-			}
-			defer resp.Body.Close()
-			io.Copy(w, resp.Body)
-		case "/control/status":
-			if r.Method != "GET" {
-				http.Error(w, "method", 405)
-				return
-			}
-			resp, e := client.Get("http://guest/status")
-			if e != nil {
-				http.Error(w, "Guest starting or unavailable", 503)
-				return
-			}
-			defer resp.Body.Close()
-			body, e := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-			if e != nil {
-				http.Error(w, e.Error(), 502)
-				return
-			}
-			var status struct {
-				Healthy bool `json:"healthy"`
-			}
-			if resp.StatusCode == 200 && json.Unmarshal(body, &status) == nil && status.Healthy {
-				mutation.Lock()
-				e = finishUpdate(state)
-				mutation.Unlock()
-				if e != nil {
-					http.Error(w, e.Error(), 500)
-					return
-				}
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(resp.StatusCode)
-			w.Write(body)
-		case "/control/setup":
-			if r.Method != "POST" {
-				http.Error(w, "method", 405)
-				return
-			}
-			if !mutation.TryLock() {
-				http.Error(w, "busy", 409)
-				return
-			}
-			defer mutation.Unlock()
-			req, _ := http.NewRequest("POST", "http://guest/setup", http.MaxBytesReader(w, r.Body, 8192))
-			resp, e := client.Do(req)
-			if e != nil {
-				http.Error(w, e.Error(), 502)
-				return
-			}
-			defer resp.Body.Close()
-			w.WriteHeader(resp.StatusCode)
-			io.Copy(w, resp.Body)
-		case "/control/reset-password":
-			if r.Method != "POST" {
-				http.Error(w, "method", 405)
-				return
-			}
-			if !mutation.TryLock() {
-				http.Error(w, "busy", 409)
-				return
-			}
-			defer mutation.Unlock()
-			req, _ := http.NewRequest("POST", "http://guest/reset-password", http.MaxBytesReader(w, r.Body, 8192))
-			resp, e := client.Do(req)
-			if e != nil {
-				http.Error(w, e.Error(), 502)
-				return
-			}
-			defer resp.Body.Close()
-			w.WriteHeader(resp.StatusCode)
-			io.Copy(w, resp.Body)
-		case "/control/stop":
-			if r.Method != "POST" {
-				http.Error(w, "method", 405)
-				return
-			}
-			if !mutation.TryLock() {
-				http.Error(w, "busy", 409)
-				return
-			}
-			defer mutation.Unlock()
-			req, _ := http.NewRequest("POST", "http://guest/stop", nil)
-			resp, e := client.Do(req)
-			if e != nil {
-				http.Error(w, e.Error(), 502)
-				return
-			}
-			resp.Body.Close()
-			if resp.StatusCode != 200 {
-				http.Error(w, "guest stop failed", 502)
-				return
-			}
-			io.WriteString(w, "Stopped\n")
-			stop.Do(func() { close(done) })
-		default:
-			http.NotFound(w, r)
-		}
-	})
-	clinicMux := http.NewServeMux()
-	// CARE Clinic's onboarding plugin is prebuilt and shipped locally for use without internet access.
-	clinicMux.Handle("/onboarding/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Host != clinicListener.Addr().String() {
-			http.Error(w, "invalid host", 403)
-			return
-		}
-		http.StripPrefix("/onboarding/", http.FileServer(http.Dir(filepath.Join(filepath.Dir(hostBundle), "onboarding")))).ServeHTTP(w, r)
-	}))
-	clinicMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Host != clinicListener.Addr().String() {
-			http.Error(w, "invalid host", 403)
-			return
-		}
-		p := path.Clean(r.URL.Path)
-		if p == "/setup" || p == "/stop" || p == "/status" || p == "/logs" || strings.HasPrefix(p, "/control") {
+		name := strings.TrimPrefix(r.URL.Path, "/control/")
+		if !(r.Method == "GET" && (name == "status" || name == "logs")) && !(r.Method == "POST" && name == "stop") {
 			http.NotFound(w, r)
 			return
 		}
-		proxy.ServeHTTP(w, r)
+		req, _ := http.NewRequestWithContext(r.Context(), r.Method, "http://guest/_agent/"+name, nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			http.Error(w, "Guest starting or unavailable: "+err.Error(), 503)
+			return
+		}
+		defer resp.Body.Close()
+		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+		if name == "stop" && resp.StatusCode == 200 {
+			select {
+			case done <- struct{}{}:
+			default:
+			}
+		}
 	})
-	server := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	defer server.Close()
-	clinicServer := &http.Server{Handler: clinicMux, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
-	defer clinicServer.Close()
-	errCh := make(chan error, 1)
-	go func() { errCh <- server.Serve(listener) }()
-	go func() { errCh <- clinicServer.Serve(clinicListener) }()
-	ui := c.URL + "/control/#" + token
-	log.Printf("Control panel: %s/control/ (access link saved privately in %s)", c.URL, state)
+	appServer := &http.Server{Handler: kiteHandler(c, proxy), ReadHeaderTimeout: 10 * time.Second}
+	defer appServer.Close()
+	errs := make(chan error, 2)
+	go func() { errs <- server.Serve(listener) }()
+	go func() { errs <- appServer.Serve(app) }()
+	ui := c.AppURL + "/_open?token=" + c.AppToken
 	if err = atomicWrite(filepath.Join(state, "open.html"), []byte("<meta http-equiv=\"refresh\" content=\"0;url="+ui+"\">"), 0600); err != nil {
 		return err
 	}
+	defer os.Remove(filepath.Join(state, "open.html"))
+	log.Printf("Kite: %s (private access link in %s/open.html)", c.AppURL, state)
 	if !noOpen {
 		_ = openURL(ui)
 	}
@@ -409,30 +252,52 @@ func serve(state, bundle string, port int, noOpen bool) error {
 	defer signal.Stop(signals)
 	select {
 	case <-signals:
-		req, _ := http.NewRequest("POST", "http://guest/stop", nil)
-		resp, e := client.Do(req)
-		if e != nil {
-			return e
-		}
-		resp.Body.Close()
-		if resp.StatusCode != 200 {
-			return errors.New("guest refused shutdown")
-		}
-		server.Close()
-		return machine.Close()
 	case <-done:
-		time.Sleep(time.Second)
-		server.Close()
-		return nil
-	case e := <-errCh:
-		return e
-	case <-machine.Done():
-		server.Close()
+	case err := <-errs:
+		return err
+	case <-vm.Done():
 		return errors.New("VM exited; see console.log")
 	}
+	return vm.Close()
 }
 
-var controlHTML = `<!doctype html><html><meta charset="utf-8"><title>CARE Anywhere</title><style>body{font:18px system-ui;max-width:720px;margin:60px auto;padding:20px;background:#f0fdf4;color:#12372a}button,input{font:inherit;padding:12px;margin:8px 0}button{background:#047857;color:white;border:0;border-radius:8px;cursor:pointer}label{display:block}pre{white-space:pre-wrap}a{color:#047857}</style><h1>CARE Anywhere</h1><p>Your clinic, on this computer.</p><pre id="status">Connecting…</pre><form id="setup"><label>Administrator username <input name="username" required autocomplete="username"></label><label>Password <input name="password" type="password" required minlength="12" autocomplete="new-password"></label><button>Create clinic</button></form><p><a href="/" target="_blank" rel="noopener">Open CARE</a></p><button id="stop">Stop clinic</button><p>Encrypted backup and restore are available through the command line in this preview.</p><script>let token=location.hash.slice(1)||sessionStorage.getItem('token');if(token){sessionStorage.setItem('token',token);history.replaceState(null,'',location.pathname)}async function call(path,method='GET',body){let r=await fetch('/control/'+path,{method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:body&&JSON.stringify(body)});let text=await r.text();if(!r.ok)throw Error(text);return text}async function status(){try{let s=JSON.parse(await call('status'));document.querySelector('#status').textContent=JSON.stringify(s,null,2);document.querySelector('#setup').hidden=s.configured}catch(e){document.querySelector('#status').textContent=e.message}}document.querySelector('#setup').onsubmit=async e=>{e.preventDefault();let b=e.target.querySelector('button');b.disabled=true;try{await call('setup','POST',Object.fromEntries(new FormData(e.target)));e.target.reset();await status()}catch(e){alert(e.message)}finally{b.disabled=false}};document.querySelector('#stop').onclick=async()=>{try{await call('stop','POST');document.querySelector('#status').textContent='Stopped'}catch(e){alert(e.message)}};status();setInterval(status,5000)</script></html>`
-
-// Reject user strings before writing them to an EnvironmentFile.
-func singleLine(s string) bool { return !strings.ContainsAny(s, "\r\n\x00") }
+// Keep the first-admin bootstrap and the guest management routes private, even
+// before Kite has an account. The cookie is a separate per-boot host capability.
+func kiteHandler(c control, proxy http.Handler) http.Handler {
+	u, _ := url.Parse(c.AppURL)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Cache-Control", "no-store")
+		if r.Host != u.Host {
+			http.Error(w, "invalid host", 403)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/_agent") || strings.HasPrefix(r.URL.Path, "/control") {
+			http.NotFound(w, r)
+			return
+		}
+		if r.URL.Path == "/_open" && r.Method == "GET" && r.URL.Query().Get("token") == c.AppToken {
+			http.SetCookie(w, &http.Cookie{Name: "ca_session", Value: c.AppToken, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+		cookie, err := r.Cookie("ca_session")
+		if err != nil || cookie.Value != c.AppToken {
+			http.Error(w, "Open Kite from Containers Anywhere to connect.", 401)
+			return
+		}
+		if origin := r.Header.Get("Origin"); origin != "" && origin != c.AppURL {
+			http.Error(w, "invalid origin", 403)
+			return
+		}
+		// Do not forward the host capability to Kite or workload proxies.
+		cookies := r.Cookies()
+		r.Header.Del("Cookie")
+		for _, cookie := range cookies {
+			if cookie.Name != "ca_session" {
+				r.AddCookie(cookie)
+			}
+		}
+		proxy.ServeHTTP(w, r)
+	})
+}

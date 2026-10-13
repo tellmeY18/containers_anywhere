@@ -1,11 +1,8 @@
-{ config, lib, pkgs, self, care, frontend, minioPackage, modulesPath, ... }:
+{ config, lib, pkgs, modulesPath, ... }:
 let
-  layers = import ./app.nix { inherit pkgs care frontend; };
-  # nixpkgs splits JIT into a separate output; the normal package excludes it.
-  postgres = pkgs.postgresql_17;
   agent = pkgs.buildGoModule {
-    pname = "care-anywhere-agent";
-    version = "0.2.0";
+    pname = "containers-anywhere-agent";
+    version = "0.1.0";
     src = lib.fileset.toSource {
       root = ../.;
       fileset = lib.fileset.unions [
@@ -19,42 +16,12 @@ let
     ldflags = [ "-s" "-w" ];
     doCheck = false;
   };
-  service = name: {
-    wantedBy = [ "multi-user.target" ];
-    requires = [ "care-init.service" ];
-    after = [ "care-init.service" ];
-    serviceConfig = {
-      User = "care";
-      Group = "care";
-      EnvironmentFile = "/var/lib/care/runtime.env";
-      ExecStart = "/run/care/app/bin/${name}";
-      Restart = "on-failure";
-      RestartSec = 5;
-      TimeoutStopSec = 120;
-      NoNewPrivileges = true;
-      PrivateTmp = true;
-    };
-  };
-  admin = name: pkgs.writeShellScriptBin "care-${name}" ''
-    set -euo pipefail
-    set -a
-    source /var/lib/care/runtime.env
-    exec ${pkgs.util-linux}/bin/runuser -u care -- /run/care/app/bin/${name}
-  '';
-  layerMount = id: {
-    device = "/dev/disk/by-id/virtio-care-${id}";
-    fsType = "erofs";
-    options = [ "ro" ];
-    neededForBoot = true;
-    noCheck = true;
-  };
+  kite = import ./kite.nix { inherit pkgs; };
 in
 {
   imports = [ "${modulesPath}/profiles/minimal.nix" "${modulesPath}/profiles/headless.nix" ];
   system.stateVersion = "25.05";
-  system.build.careApp = layers.app;
-  system.build.careRuntime = layers.runtime;
-  networking.hostName = "care-anywhere";
+  networking.hostName = "containers-anywhere";
   nix.enable = false;
   system.switch.enable = false;
   documentation.enable = false;
@@ -67,96 +34,66 @@ in
     storeOnDisk = true;
     storeDiskType = "erofs";
     storeDiskErofsFlags = [ "-zlz4hc" "-Eztailpacking" "-Efragments" "-Ededupe" ];
-    volumes = [{ image = "data.img"; mountPoint = "/var/lib"; size = 8192; }];
+    volumes = [{ image = "data.img"; mountPoint = "/var/lib"; size = 16384; }];
   };
-  fileSystems."/nix/.base-store" = layerMount "base";
-  fileSystems."/nix/.runtime-store" = layerMount "runtime";
-  fileSystems."/nix/.app-store" = layerMount "app";
-  fileSystems."/nix/store" = lib.mkForce {
+  fileSystems."/var/lib" = {
+    device = lib.mkForce "/dev/disk/by-id/virtio-ca-data";
+    autoResize = true;
     neededForBoot = true;
-    overlay.lowerdir = [ "/nix/.app-store" "/nix/.runtime-store" "/nix/.base-store" ];
   };
-  fileSystems."/var/lib".device = lib.mkForce "/dev/disk/by-id/virtio-care-data";
-  fileSystems."/var/lib".autoResize = true;
-  fileSystems."/var/lib".neededForBoot = true;
-  boot.initrd.supportedFilesystems = [ "erofs" "overlay" "ext4" ];
-  boot.kernelModules = [ "vmw_vsock_virtio_transport" "virtio_net" "qemu_fw_cfg" "virtio_balloon" ];
+  boot.initrd.supportedFilesystems = [ "erofs" "ext4" ];
+  boot.kernelModules = [ "vmw_vsock_virtio_transport" "virtio_net" "qemu_fw_cfg" "virtio_balloon" "overlay" "br_netfilter" ];
+  boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
   networking.useDHCP = true;
-  networking.firewall.enable = true;
-  networking.firewall.allowedTCPPorts = [ 8080 ];
-  users.groups.care = { };
-  users.users.care = { isSystemUser = true; group = "care"; };
-  services.postgresql = {
+  networking.firewall = {
     enable = true;
-    package = postgres;
-    ensureDatabases = [ "care" ];
-    ensureUsers = [{ name = "care"; ensureDBOwnership = true; }];
-    authentication = lib.mkForce ''local all all peer'';
-    settings.shared_buffers = "128MB";
+    allowedTCPPorts = [ 8080 ]; # Per-boot mTLS guest agent, never raw Kubernetes.
+    trustedInterfaces = [ "cni0" "flannel.1" ];
+    checkReversePath = "loose";
   };
-  services.redis.servers."" = { enable = true; port = 6379; };
-  # Silo retains MinIO's on-disk format and API, with current security fixes.
-  services.minio = {
+  services.k3s = {
     enable = true;
-    listenAddress = "127.0.0.1:9100";
-    rootCredentialsFile = "/var/lib/care/minio.env";
-    package = minioPackage;
+    role = "server";
+    nodeName = "containers-anywhere";
+    disable = [ "traefik" "servicelb" "metrics-server" ];
+    extraFlags = [ "--write-kubeconfig-mode=0600" "--secrets-encryption" ];
+    gracefulNodeShutdown.enable = true;
+    images = [ config.services.k3s.package.airgap-images kite ];
+    manifests.kite.source = ./kite.yaml;
   };
-  services.fstrim.enable = true;
-  fonts = { fontconfig.enable = true; packages = [ pkgs.dejavu_fonts ]; };
-  environment.systemPackages = [ (admin "admin") (admin "admin-reset") ];
-  systemd.tmpfiles.rules = [ "d /run/care 0755 root root -" "L /run/care/app - - - - /nix/.app-store/entry" ];
-  systemd.services.care-secrets = {
-    requiredBy = [ "minio.service" "care-init.service" ];
-    before = [ "minio.service" "care-init.service" ];
+  # The root filesystem is disposable. Retain the node password across boots,
+  # alongside the cluster database, containerd images and local-path volumes.
+  systemd.tmpfiles.rules = [
+    "d /var/lib/rancher/node 0700 root root -"
+    "L+ /etc/rancher/node - - - - /var/lib/rancher/node"
+    "d /var/lib/containers-anywhere/kite 0700 root root -"
+  ];
+  systemd.services.kite-secrets = {
+    before = [ "k3s.service" ];
+    requiredBy = [ "k3s.service" ];
     after = [ "systemd-tmpfiles-setup.service" ];
-    serviceConfig = { Type = "oneshot"; RemainAfterExit = true; StateDirectory = "care"; };
+    serviceConfig = { Type = "oneshot"; RemainAfterExit = true; UMask = "0077"; };
     script = ''
-      /run/care/app/bin/secrets
-      chown -R care:care /var/lib/care
+      ${pkgs.python3}/bin/python3 ${./kite-secrets.py}
     '';
   };
-  systemd.services.care-init = {
+  # A reconnecting local tunnel avoids NodePort/hostNetwork exposure and survives
+  # Kite pod replacement. Both HTTP and WebSocket upgrades use the guest agent.
+  systemd.services.kite-forward = {
     wantedBy = [ "multi-user.target" ];
-    requires = [ "postgresql.target" "redis.service" "care-secrets.service" ];
-    after = [ "postgresql.target" "redis.service" "care-secrets.service" ];
+    after = [ "k3s.service" ];
+    requires = [ "k3s.service" ];
     serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-      User = "care";
-      Group = "care";
-      EnvironmentFile = "/var/lib/care/runtime.env";
-      ExecStart = "/run/care/app/bin/init";
+      ExecStart = "${config.services.k3s.package}/bin/k3s kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml -n kite-system port-forward --address=127.0.0.1 service/kite 8081:8080";
+      Restart = "always";
+      RestartSec = 5;
     };
   };
-  systemd.services.care-api = lib.recursiveUpdate (service "api") { serviceConfig.RuntimeDirectory = "care-api"; };
-  systemd.services.care-worker = service "worker";
-  systemd.services.care-beat = service "beat";
-  systemd.services.care-buckets = {
-    wantedBy = [ "multi-user.target" ];
-    requires = [ "minio.service" "care-secrets.service" ];
-    after = [ "minio.service" "care-secrets.service" ];
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-      User = "care";
-      Group = "care";
-      EnvironmentFile = "/var/lib/care/runtime.env";
-      ExecStart = "/run/care/app/bin/buckets";
-    };
-  };
-  systemd.services.care-agent = {
+  systemd.services.containers-agent = {
     wantedBy = [ "multi-user.target" ];
     after = [ "local-fs.target" ];
-    path = [ pkgs.systemd ];
-    serviceConfig = { ExecStart = "${agent}/bin/care_anywhere guest"; Restart = "on-failure"; };
+    path = [ pkgs.systemd config.services.k3s.package ];
+    serviceConfig = { ExecStart = "${agent}/bin/containers_anywhere guest"; Restart = "on-failure"; };
   };
-  services.caddy = {
-    enable = true;
-    extraConfig = ''
-      http://127.0.0.1:8081 {
-        import /run/care/app/Caddyfile
-      }
-    '';
-  };
+  services.fstrim.enable = true;
 }

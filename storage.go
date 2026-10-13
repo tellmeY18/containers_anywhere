@@ -16,8 +16,8 @@ import (
 	"strings"
 
 	"filippo.io/age"
-	"github.com/tellmeY18/care_anywhere/internal/atomicfile"
-	"github.com/tellmeY18/care_anywhere/internal/diskspace"
+	"github.com/tellmeY18/containers_anywhere/internal/atomicfile"
+	"github.com/tellmeY18/containers_anywhere/internal/diskspace"
 )
 
 func atomicWrite(p string, b []byte, mode os.FileMode) error {
@@ -43,9 +43,6 @@ func verifyBundle(dir string) (manifest, error) {
 		return m, err
 	}
 	names := []string{m.Kernel, m.Initrd, "system.img", "data.img"}
-	if m.Format == 2 {
-		names = append(names, "runtime.img", "app.img")
-	}
 	for _, n := range names {
 		if _, ok := m.Files[n]; !ok {
 			return m, fmt.Errorf("missing checksum: %s", n)
@@ -127,7 +124,7 @@ func ensureData(state, bundle string, m manifest) error {
 	if e := copyExclusive(filepath.Join(bundle, "data.img"), filepath.Join(stage, "data.img")); e != nil {
 		return e
 	}
-	if m.Format == 2 {
+	if m.Format == 3 {
 		f, e := os.OpenFile(filepath.Join(stage, "data.img"), os.O_WRONLY, 0)
 		if e != nil {
 			return e
@@ -245,6 +242,15 @@ func restore(state, file, keyPath string) error {
 		return e
 	}
 	defer unlock()
+	entries, e := os.ReadDir(state)
+	if e != nil {
+		return e
+	}
+	for _, entry := range entries {
+		if entry.Name() != "clinic.lock" {
+			return errors.New("restore requires an empty destination")
+		}
+	}
 	for _, n := range []string{"data.img", "release.json"} {
 		if _, e = os.Lstat(filepath.Join(state, n)); !os.IsNotExist(e) {
 			return fmt.Errorf("restore requires an empty destination (%s)", n)

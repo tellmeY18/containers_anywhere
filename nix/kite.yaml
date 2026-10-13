@@ -1,0 +1,100 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kite-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kite
+  namespace: kite-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: containers-anywhere-kite
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: kite
+    namespace: kite-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kite-config
+  namespace: kite-system
+data:
+  config.yaml: |
+    clusters:
+      - name: local
+        description: Containers Anywhere
+        inCluster: true
+        default: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kite
+  namespace: kite-system
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: kite
+  template:
+    metadata:
+      labels:
+        app: kite
+    spec:
+      serviceAccountName: kite
+      containers:
+        - name: kite
+          image: containers-anywhere/kite:0.16.0
+          imagePullPolicy: Never
+          envFrom:
+            - secretRef:
+                name: kite-secrets
+          env:
+            - {name: KITE_CONFIG_FILE, value: /config/config.yaml}
+            - {name: DB_TYPE, value: sqlite}
+            - {name: DB_DSN, value: /data/kite.db}
+            - {name: PLUGIN_DIR, value: /data/plugins}
+            - {name: ENABLE_ANALYTICS, value: "false"}
+            - {name: ANONYMOUS_USER_ENABLED, value: "false"}
+          ports:
+            - {name: http, containerPort: 8080}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 768Mi}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 30
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: config, mountPath: /config, readOnly: true}
+      volumes:
+        - name: data
+          hostPath:
+            path: /var/lib/containers-anywhere/kite
+            type: Directory
+        - name: config
+          configMap:
+            name: kite-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kite
+  namespace: kite-system
+spec:
+  selector: {app: kite}
+  ports:
+    - {name: http, port: 8080, targetPort: http}

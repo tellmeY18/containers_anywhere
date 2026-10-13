@@ -1,156 +1,129 @@
 #!/usr/bin/env python3
-"""Build offline alpha packages from a verified, prebuilt appliance (build tool only)."""
+"""Package a small launcher with build-pinned downloads; no VM in the installer."""
 import argparse
 import hashlib
-import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
+import tarfile
+from urllib.parse import urlparse
+
 from runtime import stage_runtime, download
-from release import package_version
 
 ROOT = Path(__file__).resolve().parent.parent
-VERSION = package_version(os.environ.get("CARE_RELEASE_VERSION", (ROOT / "VERSION").read_text().strip() + "-dev"))
 
 
 def run(*args, **kwargs):
     subprocess.run(args, check=True, **kwargs)
 
 
-def copy(source, target):
-    # APFS copy-on-write avoids another 10 GiB allocation on the build Mac.
-    if os.name == "nt":
-        shutil.copyfile(source, target)
-    elif os.uname().sysname == "Darwin":
-        run("cp", "-c", str(source), str(target))
-    else:
-        run("cp", "--reflink=auto", "--sparse=always", str(source), str(target))
+def digest(path):
+    with path.open("rb") as f:
+        return hashlib.file_digest(f, "sha256").hexdigest()
+
+
+def checksum(path):
+    path.with_name(path.name + ".sha256").write_text(f"{digest(path)}  {path.name}\n")
+
+
+def pack(directory, destination):
+    # Explicit regular files only: runtime symlinks are dereferenced at build time.
+    with tarfile.open(destination, "w:gz", dereference=True) as archive:
+        for path in sorted(directory.rglob("*")):
+            if path.is_file():
+                archive.add(path, arcname=path.relative_to(directory).as_posix(), recursive=False)
+    checksum(destination)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("platform", choices=["macos", "linux", "windows"])
-    parser.add_argument("--bundle", type=Path, required=True)
+    parser.add_argument("--appliance", type=Path, required=True, help="exact appliance archive to pin")
+    parser.add_argument("--arch", choices=["arm64", "amd64"], required=True)
+    parser.add_argument("--base-url", required=True, help="immutable HTTPS release asset directory")
+    parser.add_argument("--version", required=True)
     parser.add_argument("--output", type=Path, default=ROOT / "dist/releases")
     args = parser.parse_args()
-    bundle = args.bundle.resolve()
-    manifest = json.loads((bundle / "manifest.json").read_text())
-    for name in [manifest["kernel"], manifest["initrd"], "system.img", "data.img", "runtime.img", "app.img"]:
-        if name not in manifest["files"]:
-            raise ValueError(f"Missing checksum: {name}")
-    for name, digest in manifest["files"].items():
-        if Path(name).name != name or any(c in name for c in "\\/:") or name in ("", ".", ".."):
-            raise ValueError("Invalid bundle filename")
-        if (bundle / name).is_symlink() or not (bundle / name).is_file():
-            raise ValueError("Bundle members must be regular files")
-        with (bundle / name).open("rb") as f:
-            if hashlib.file_digest(f, "sha256").hexdigest() != digest:
-                raise ValueError(f"Bundle checksum mismatch: {name}")
-    arch = manifest["arch"]
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-mvp\.[1-9][0-9]*", args.version):
+        raise ValueError("Expected immutable version, e.g. 0.1.0-mvp.1")
+    url = urlparse(args.base_url)
+    if url.scheme != "https" or not url.netloc or url.username or url.query or url.fragment or any(c.isspace() for c in args.base_url):
+        raise ValueError("Expected an HTTPS release directory without credentials, query or spaces")
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
-    stage = out / f"stage-{args.platform}-{arch}"
-    stage.mkdir()  # Refuse to overwrite an earlier build.
+    stage = out / f"stage-{args.platform}-{args.arch}"
+    stage.mkdir()
+    flags = ["-s", "-w", "-X", f"main.applianceURL={args.base_url.rstrip('/')}/appliance-{args.arch}.tar.gz",
+             "-X", f"main.applianceSHA256={digest(args.appliance)}"]
+    if args.platform != "macos":
+        runtime_dir = stage / "qemu"
+        stage_runtime(runtime_dir, args.arch)
+        runtime_archive = out / f"runtime-{args.platform}-{args.arch}.tar.gz"
+        pack(runtime_dir, runtime_archive)
+        flags += ["-X", f"main.runtimeURL={args.base_url.rstrip('/')}/{runtime_archive.name}",
+                  "-X", f"main.runtimeSHA256={digest(runtime_archive)}"]
+        shutil.rmtree(runtime_dir)
     if args.platform == "macos":
-        if os.uname().sysname != "Darwin" or arch != "arm64":
-            raise ValueError("The first macOS alpha requires an Apple Silicon build host and bundle")
-        app = stage / "CARE Anywhere.app"
+        if args.arch != "arm64":
+            raise ValueError("macOS MVP supports Apple Silicon")
+        app = stage / "Containers Anywhere.app"
         contents = app / "Contents"
-        exe = contents / "MacOS/care-anywhere"
+        binary = contents / "MacOS/containers-anywhere"
         resources = contents / "Resources"
-        exe.parent.mkdir(parents=True)
+        binary.parent.mkdir(parents=True)
         resources.mkdir()
-        dest = resources / "bundle"
-        run("go", "build", "-trimpath", "-ldflags=-s -w", "-o", str(exe), ".", cwd=ROOT)
         (contents / "Info.plist").write_bytes(plistlib.dumps({
-            "CFBundleName": "CARE Anywhere", "CFBundleDisplayName": "CARE Anywhere",
-            "CFBundleIdentifier": "network.ohc.care-anywhere", "CFBundleVersion": os.environ.get("GITHUB_RUN_NUMBER", "1"),
-            "CFBundleShortVersionString": VERSION.split("-")[0], "CFBundleExecutable": "care-anywhere",
-            "CFBundlePackageType": "APPL", "LSMinimumSystemVersion": "13.0",
-            "LSUIElement": True, "NSHighResolutionCapable": True,
-            "CFBundleIconFile": "AppIcon", "LSApplicationCategoryType": "public.app-category.medical",
+            "CFBundleName": "Containers Anywhere", "CFBundleDisplayName": "Containers Anywhere",
+            "CFBundleIdentifier": "org.containers-anywhere.launcher", "CFBundleVersion": os.environ.get("GITHUB_RUN_NUMBER", "1"),
+            "CFBundleShortVersionString": args.version.split("-")[0], "CFBundleExecutable": binary.name,
+            "CFBundlePackageType": "APPL", "LSMinimumSystemVersion": "13.0", "LSUIElement": True,
+            "NSHighResolutionCapable": True, "LSApplicationCategoryType": "public.app-category.developer-tools",
         }))
-        run("swift", str(ROOT / "scripts/icon.swift"), str(resources / "AppIcon.iconset"))
-        run("iconutil", "-c", "icns", str(resources / "AppIcon.iconset"), "-o", str(resources / "AppIcon.icns"))
-        shutil.rmtree(resources / "AppIcon.iconset")
         (stage / "Applications").symlink_to("/Applications")
-        (stage / "Start here.txt").write_text(
-            "CARE Anywhere — Apple Silicon alpha\n\n"
-            "1. Drag CARE Anywhere to Applications.\n2. Eject this disk image.\n"
-            "3. Open CARE Anywhere from Applications. Your browser opens automatically.\n\n"
-            "This alpha is not notarized. After the first blocked launch, use System Settings > "
-            "Privacy & Security > Open Anyway, then open the app again. Do not disable Gatekeeper.\n\n"
-            "Requires macOS 13+, Apple Silicon, 8 GB RAM and 12 GB free for app + clinic.\n"
-            "Initial preparation can take several minutes. Use test records for this alpha.\n"
-            "Closing the browser keeps CARE running. Stop or quit from its control panel.\n"
-            "Removing the app preserves clinic data in ~/Library/Application Support/care-anywhere.\n"
-        )
-    elif args.platform == "linux":
-        app = stage / "care-anywhere"
-        app.mkdir()
-        resources = app
-        dest = app / "bundle"
-        env = dict(os.environ, GOOS="linux", GOARCH=arch, CGO_ENABLED="0")
-        run("go", "build", "-trimpath", "-ldflags=-s -w", "-o", str(app / "care-anywhere"), ".", cwd=ROOT, env=env)
-        shutil.copy2(ROOT / "scripts/install-linux.sh", app / "install.sh")
-        (app / "install.sh").chmod(0o755)
-        shutil.copy2(ROOT / "scripts/care-anywhere.svg", app / "care-anywhere.svg")
-        (app / "README.txt").write_text(
-            "CARE Anywhere Linux alpha\n\nMake the AppImage executable, then open it.\n"
-            "Without FUSE 2 use --appimage-extract-and-run. Everything runs locally.\n"
-            "Requires 8 GB RAM, KVM access, xdg-open, a browser, and 12 GB disk space.\n"
-            "If /dev/kvm access is denied, ask your administrator to grant your user KVM access.\n"
-            "Never run the desktop app with sudo.\n"
-            "QEMU and its libraries are bundled. Data is in ${XDG_CONFIG_HOME:-~/.config}/care-anywhere and survives uninstall.\n"
-            "Stop CARE before removing ~/.local/opt/care-anywhere and its applications-menu entry.\n"
-        )
     else:
-        if os.name != "nt" or arch != "amd64":
-            raise ValueError("Windows packaging requires an x64 Windows host and bundle")
-        app = stage / "care-anywhere"
+        app = stage / "containers-anywhere"
         app.mkdir()
         resources = app
-        dest = app / "bundle"
-        run("go", "build", "-trimpath", "-ldflags=-s -w -H=windowsgui", "-o", str(app / "care-anywhere.exe"), ".", cwd=ROOT)
-    dest.mkdir()
-    shutil.copytree(ROOT / "frontend/dist", resources / "web")
-    shutil.copytree(ROOT / "dist/onboarding", resources / "onboarding")
-    for name in ["manifest.json", *manifest["files"]]:
-        copy(bundle / name, dest / name)
+        binary = app / ("containers-anywhere.exe" if args.platform == "windows" else "containers-anywhere")
+        if args.platform == "windows":
+            flags += ["-H=windowsgui"]
+    env = dict(os.environ, GOARCH=args.arch)
+    if args.platform != "macos":
+        env.update(GOOS=args.platform, CGO_ENABLED="0")
+    run("go", "build", "-trimpath", "-ldflags=" + " ".join(flags), "-o", str(binary), ".", cwd=ROOT, env=env)
     for name in ["LICENSE", "THIRD_PARTY_NOTICES.md", "README.md", "flake.lock"]:
         shutil.copy2(ROOT / name, resources / name)
-    if args.platform != "macos":
-        stage_runtime(app / "qemu", arch)
+    prefix = f"Containers-Anywhere-{args.version}-{args.platform}-{args.arch}"
     if args.platform == "macos":
         identity = os.environ.get("MACOS_SIGN_IDENTITY", "-")
         run("codesign", "--force", "--sign", identity, "--options", "runtime", "--entitlements", str(ROOT / "entitlements.plist"), str(app))
         run("codesign", "--verify", "--deep", "--strict", str(app))
-        artifact = out / f"CARE-Anywhere-{VERSION}-macos-{arch}.dmg"
-        run("hdiutil", "create", "-volname", "CARE Anywhere", "-srcfolder", str(stage), "-format", "ULMO", "-ov", str(artifact))
+        artifact = out / (prefix + ".dmg")
+        run("hdiutil", "create", "-volname", "Containers Anywhere", "-srcfolder", str(stage), "-format", "ULMO", str(artifact))
         run("hdiutil", "verify", str(artifact))
         if identity != "-" and os.environ.get("MACOS_NOTARY_PROFILE"):
             run("xcrun", "notarytool", "submit", str(artifact), "--keychain-profile", os.environ["MACOS_NOTARY_PROFILE"], "--wait")
             run("xcrun", "stapler", "staple", str(artifact))
     elif args.platform == "linux":
-        (app / "AppRun").write_text('#!/bin/sh\nHERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$HERE/care-anywhere" desktop "$@"\n')
+        (app / "AppRun").write_text('#!/bin/sh\nHERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$HERE/containers-anywhere" "$@"\n')
         (app / "AppRun").chmod(0o755)
-        (app / "care-anywhere.desktop").write_text('[Desktop Entry]\nType=Application\nName=CARE Anywhere\nExec=care-anywhere\nIcon=care-anywhere\nCategories=Education;Science;MedicalSoftware;\nTerminal=false\n')
+        (app / "containers-anywhere.desktop").write_text('[Desktop Entry]\nType=Application\nName=Containers Anywhere\nExec=containers-anywhere\nIcon=containers-anywhere\nCategories=Development;\nTerminal=false\n')
+        shutil.copy2(ROOT / "scripts/containers-anywhere.svg", app / "containers-anywhere.svg")
         tool = out / "appimagetool"
-        image_arch = "aarch64" if arch == "arm64" else "x86_64"
-        digest = "f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158" if arch == "arm64" else "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
-        download(f"https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-{image_arch}.AppImage", tool, digest)
+        arch = "aarch64" if args.arch == "arm64" else "x86_64"
+        sha = "f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158" if args.arch == "arm64" else "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+        download(f"https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-{arch}.AppImage", tool, sha)
         tool.chmod(0o755)
-        artifact = out / f"CARE-Anywhere-{VERSION}-linux-{arch}.AppImage"
-        run(str(tool), "--appimage-extract-and-run", "--no-appstream", str(app), str(artifact), env=dict(os.environ, ARCH=image_arch))
+        artifact = out / (prefix + ".AppImage")
+        run(str(tool), "--appimage-extract-and-run", "--no-appstream", str(app), str(artifact), env=dict(os.environ, ARCH=arch))
     else:
         compiler = shutil.which("ISCC.exe") or r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-        run(compiler, f"/DAppSource={app}", f"/DOutputDir={out}", f"/DAppVersion={VERSION}", str(ROOT / "scripts/windows.iss"))
-        artifact = out / f"CARE-Anywhere-{VERSION}-windows-amd64.exe"
-    with artifact.open("rb") as f:
-        digest = hashlib.file_digest(f, "sha256").hexdigest()
-    artifact.with_suffix(artifact.suffix + ".sha256").write_text(f"{digest}  {artifact.name}\n")
+        run(compiler, f"/DAppSource={app}", f"/DOutputDir={out}", f"/DAppVersion={args.version}", str(ROOT / "scripts/windows.iss"))
+        artifact = out / (prefix + ".exe")
+    checksum(artifact)
     print(artifact)
 
 

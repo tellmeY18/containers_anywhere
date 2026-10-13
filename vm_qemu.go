@@ -39,7 +39,7 @@ func bootVM(bundle, state string, m manifest) (machine, error) {
 		accel = "whpx"
 	}
 	// Explicit slow software emulation is useful on CI without nested virtualization.
-	if os.Getenv("CARE_QEMU_ACCEL") == "tcg" {
+	if os.Getenv("CONTAINERS_QEMU_ACCEL") == "tcg" {
 		accel = "tcg"
 	} else if err := doctor(); err != nil {
 		return nil, err
@@ -84,19 +84,23 @@ func bootVM(bundle, state string, m manifest) (machine, error) {
 	if m.Arch == "arm64" {
 		console, machine = "ttyAMA0", "virt"
 	}
-	args := []string{"-machine", machine, "-accel", accel, "-cpu", cpu, "-m", "4096", "-smp", "2", "-display", "none", "-monitor", "none", "-serial", "stdio", "-no-reboot",
+	cpus, memory, err := vmResources()
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"-machine", machine, "-accel", accel, "-cpu", cpu, "-m", fmt.Sprint(memory), "-smp", fmt.Sprint(cpus), "-display", "none", "-monitor", "none", "-serial", "stdio", "-no-reboot",
 		"-L", filepath.Join(runtimeDir, "share", "qemu"),
 		"-kernel", filepath.Join(bundle, m.Kernel), "-initrd", filepath.Join(bundle, m.Initrd),
 		"-append", "console=" + console + " panic=1 init=" + m.System + "/init",
-		"-fw_cfg", "name=opt/care/tls,file=" + qemuEscape(secret),
+		"-fw_cfg", "name=opt/containers-anywhere/tls,file=" + qemuEscape(secret),
 		"-device", "virtio-net-pci,netdev=net0"}
-	args = append(args, qemuDiskArgs(bundle, state, m.Format)...)
+	args = append(args, qemuDiskArgs(bundle, state)...)
 	network := "user,id=net0,hostfwd=tcp:127.0.0.1:" + port + "-:8080"
-	if os.Getenv("CARE_NO_NETWORK") == "1" {
+	if os.Getenv("CONTAINERS_NO_NETWORK") == "1" {
 		network += ",restrict=on"
 	}
 	args = append(args, "-netdev", network)
-	if os.Getenv("CARE_GUEST_DEBUG") == "1" {
+	if os.Getenv("CONTAINERS_GUEST_DEBUG") == "1" {
 		for i := range args {
 			if args[i] == "-append" {
 				args[i+1] += " systemd.journald.forward_to_console=1"
@@ -122,23 +126,18 @@ func bootVM(bundle, state string, m manifest) (machine, error) {
 	return v, nil
 }
 
-func qemuDiskArgs(bundle, state string, format int) []string {
+func qemuDiskArgs(bundle, state string) []string {
 	disks := []struct {
 		id, path, options string
 	}{
 		{"base", filepath.Join(bundle, "system.img"), ",readonly=on"},
 		{"data", filepath.Join(state, "data.img"), ",discard=unmap"},
 	}
-	if format == 2 {
-		for _, layer := range []string{"runtime", "app"} {
-			disks = append(disks, struct{ id, path, options string }{layer, filepath.Join(bundle, layer+".img"), ",readonly=on"})
-		}
-	}
 	var args []string
 	for _, disk := range disks {
 		args = append(args,
-			"-drive", "file="+qemuEscape(disk.path)+",format=raw,if=none,id=care-"+disk.id+disk.options,
-			"-device", "virtio-blk-pci,drive=care-"+disk.id+",serial=care-"+disk.id)
+			"-drive", "file="+qemuEscape(disk.path)+",format=raw,if=none,id=ca-"+disk.id+disk.options,
+			"-device", "virtio-blk-pci,drive=ca-"+disk.id+",serial=ca-"+disk.id)
 	}
 	return args
 }
@@ -157,7 +156,7 @@ func (v *qemuVM) Close() error {
 	t := &http.Transport{DialContext: v.Dial}
 	defer t.CloseIdleConnections()
 	c := &http.Client{Transport: t, Timeout: 10 * time.Second}
-	if r, err := c.Post("http://guest/stop", "application/json", nil); err == nil {
+	if r, err := c.Post("http://guest/_agent/stop", "application/json", nil); err == nil {
 		r.Body.Close()
 	}
 	select {
@@ -228,6 +227,13 @@ func verifyRuntime(dir string) error {
 	for name, want := range files {
 		if !filepath.IsLocal(name) || strings.Contains(name, "\\") {
 			return fmt.Errorf("invalid QEMU runtime filename")
+		}
+		info, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(name)))
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("QEMU runtime member must be regular")
 		}
 		f, err := os.Open(filepath.Join(dir, filepath.FromSlash(name)))
 		if err != nil {
