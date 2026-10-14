@@ -1,7 +1,8 @@
 # Containers Anywhere agent guidance
 
-Read README.md first. This branch intentionally pivots CARE Anywhere into a
-K3s-based container appliance; the former "no containers" constraint is superseded.
+Read README.md first. Containers Anywhere is an independent, application-agnostic
+K3s appliance. Recovery design is in docs/DISASTER_RECOVERY.md; delivery gates are
+in ROADMAP.md. Planned recovery features must not be described as implemented.
 
 - Small native Go host launcher, downloadable NixOS VM, single-node K3s and Kite.
 - macOS uses Virtualization.framework; Linux/Windows use downloaded, hash-verified
@@ -26,7 +27,11 @@ K3s-based container appliance; the former "no containers" constraint is supersed
 - Do not claim platform boot acceptance from compile/packaging checks.
 - Do not commit dist/, .state/, *.img, node_modules or downloaded artifacts.
 - This is a jj repository. Use jj bookmarks and noninteractive --no-pager commands.
-  Push only when authorized. Preserve main as the original CARE product history.
+  Push only when authorized. The default branch is containers-anywhere. Preserve
+  archive/care-anywhere as the original CARE product history; do not rewrite it.
+- Whole-disk recovery points and cluster datastore backups are not workload PITR.
+  PITR claims require tested application-native logs, base backups, keys and a
+  verified recovery window. Restore drills must isolate outbound side effects.
 
 Key files: main.go (host CLI/proxy), desktop.go (embedded bootstrap panel),
 bootstrap.go (pinned resumable downloads), storage.go (disk/backup), vm_*.go,

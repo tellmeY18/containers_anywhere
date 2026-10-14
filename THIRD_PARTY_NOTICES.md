@@ -1,4 +1,6 @@
-# CARE Clinic reuse
+# Containers Anywhere third-party notices
+
+## CARE Clinic reuse
 
 `internal/atomicfile` adapts CARE Clinic's atomic replacement and Windows private
 file ACL implementation from `app/internal/sys/atomicfile`.
@@ -36,7 +38,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 Other components retain their own licenses. Distributing appliance images or
-QEMU/Firecracker helpers requires their corresponding notices and source-offer
+QEMU helpers requires their corresponding notices and source-offer
 obligations, independent of the launcher license.
 
 # K3s and Kite
@@ -49,7 +51,7 @@ Source and license: https://github.com/kite-org/kite/tree/v0.16.0.
 `nix/kite.yaml` adapts Kite's deployment manifest for persistent local storage,
 generated secrets and the preloaded image.
 
-# Bundled QEMU
+# Downloaded QEMU runtime
 
 Linux packages redistribute Ubuntu's QEMU and shared-library packages with their
 runtime license files. Corresponding source packages are available from

@@ -90,7 +90,7 @@ func copyExclusive(src, dst string) error {
 		return e
 	}
 	if space.Free < uint64(info.Size())+(256<<20) {
-		return errors.New("insufficient disk space for clinic data")
+		return errors.New("insufficient disk space for cluster data")
 	}
 	out, e := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if e != nil {
@@ -114,7 +114,7 @@ func ensureData(state, bundle string, m manifest) error {
 		return e
 	}
 	if _, e := os.Stat(filepath.Join(state, "release.json")); e == nil {
-		return errors.New("release exists but clinic disk missing; restore a backup")
+		return errors.New("release exists but cluster disk missing; restore a backup")
 	}
 	stage, e := os.MkdirTemp(state, "initialize-")
 	if e != nil {
@@ -148,7 +148,7 @@ func ensureData(state, bundle string, m manifest) error {
 // its disk is read. Restore only accepts an empty destination, retaining originals.
 func backup(state, file string) error {
 	if file == "" {
-		return errors.New("--file is required; stop the clinic before backup")
+		return errors.New("--file is required; stop the cluster before backup")
 	}
 	unlock, e := lockState(state)
 	if e != nil {
@@ -162,7 +162,7 @@ func backup(state, file string) error {
 	if e != nil {
 		return e
 	}
-	// A recovery key is never silently overwritten or placed inside clinic state.
+	// A recovery key is never silently overwritten or placed inside cluster state.
 	abs, e := filepath.Abs(file)
 	if e != nil {
 		return e
@@ -172,7 +172,7 @@ func backup(state, file string) error {
 		return e
 	}
 	if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return errors.New("save backups outside clinic state")
+		return errors.New("save backups outside cluster state")
 	}
 	keyPath := file + ".key"
 	key, e := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
@@ -327,13 +327,13 @@ func restore(state, file, keyPath string) error {
 	if m.Arch != runtime.GOARCH {
 		return errors.New("cold disk restore requires matching architecture; use a logical export to migrate architectures")
 	}
-	// Publish identity first. Interrupted publication refuses to create an empty clinic.
+	// Publish identity first. Interrupted publication refuses to create an empty cluster.
 	if e = atomicWrite(filepath.Join(state, "release.json"), b, 0600); e != nil {
 		return e
 	}
 	if e = os.Rename(filepath.Join(stage, "data.img"), filepath.Join(state, "data.img")); e != nil {
 		return e
 	}
-	fmt.Println("Restored. Start with the matching release bundle and verify the clinic.")
+	fmt.Println("Restored. Start with the matching release bundle and verify the cluster.")
 	return nil
 }

@@ -163,7 +163,7 @@ func (v *qemuVM) Close() error {
 	case <-v.done:
 		return nil
 	case <-time.After(150 * time.Second):
-		return fmt.Errorf("QEMU is still running; retaining clinic lock until shutdown")
+		return fmt.Errorf("QEMU is still running; retaining cluster lock until shutdown")
 	}
 }
 

@@ -1,4 +1,4 @@
-# Containers Anywhere — MVP
+# Containers Anywhere
 
 **A small desktop launcher. A downloadable Kubernetes appliance. Your workloads,
 on your computer.**
@@ -7,9 +7,18 @@ Containers Anywhere boots a single-node K3s VM and opens **Kite v0.16.0** for
 installing Helm charts, applying YAML, inspecting resources, logs and terminals.
 The host needs no Docker, Kubernetes, Nix, Python or Node installation.
 
-This is the `containers-anywhere` product pivot from CARE Anywhere. It uses a
-separate application identity and state directory. Existing CARE data is not
-compatible with this appliance.
+An independent, application-agnostic project for running cloud-native workloads
+on consumer hardware. The current release is an **alpha**; mission-critical
+durability and disaster recovery are the next engineering milestones.
+
+[Download the alpha](https://github.com/tellmeY18/containers_anywhere/releases/tag/containers-v0.1.0-mvp.42)
+· [Recovery architecture](docs/DISASTER_RECOVERY.md)
+· [Roadmap](ROADMAP.md)
+· [Appliance optimization](docs/APPLIANCE.md)
+
+CARE Anywhere's original code and documentation are preserved on
+[`archive/care-anywhere`](https://github.com/tellmeY18/containers_anywhere/tree/archive/care-anywhere).
+Its releases and history are retained. See [project history](docs/HISTORY.md).
 
 ## User experience
 
@@ -106,6 +115,11 @@ Download caches are under `appliances/` inside state. Avoid cloud-synced folders
 
 ## Backup and restore
 
+**Available today: manual, encrypted, stopped-VM recovery points. PITR,
+scheduled/off-device backups and automated recovery drills are not implemented.**
+See the [recovery contract and planned architecture](docs/DISASTER_RECOVERY.md)
+for protection layers, failure scenarios and acceptance criteria.
+
 ```sh
 containers-anywhere stop --state /path/to/cluster
 containers-anywhere backup --state /path/to/cluster --file /external/cluster.age
@@ -141,7 +155,9 @@ Artifacts use `0.1.0-mvp.<run-number>`. Launchers point to immutable
 `containers-v<version>` release URLs in the repository that built them. **The
 complete draft must be published before first-run downloads work for users.**
 Actions artifacts alone are useful for local-bundle testing; their future public
-download URLs are not live yet. No GitHub repository rename is required to build.
+download URLs are not live until publication. Alpha 42 is already published.
+New builds use `tellmeY18/containers_anywhere`; older launchers rely on GitHub's
+redirect from the former repository name. Do not reuse that old repository name.
 
 Build tools: Go, Nix on a matching Linux builder, Python 3.11+, platform packaging
 tools; no Node frontend toolchain. The flake pins nixpkgs/microvm.nix. Kite Linux
@@ -172,8 +188,10 @@ catalog is included. Kite's GET-only Kube Proxy is a preview facility, not a
 general ingress solution. Keep unrelated/untrusted web applications off the
 management origin. Download hashes authenticate against the launcher build;
 publisher-signed update channels and notarized/signed installers remain release
-hardening work. Exact download sizes and idle resource use must be measured from
-the resulting artifacts, not inferred from source.
+hardening work. Alpha 42 downloads are 877 MB (ARM64 appliance), 1.09 GB (AMD64
+appliance), approximately 21 MB (Linux QEMU) and 93 MB (Windows QEMU). Installers
+are 2.5 MB (DMG), 5.0 MB (EXE), and 3.7–4.1 MB (AppImage), in decimal units.
+Idle resource use remains unmeasured; see the optimization plan.
 
 Use Deployments or StatefulSets for long-running workloads: Kubernetes graceful
 node shutdown terminates bare Pods, and only controllers recreate them after boot.
