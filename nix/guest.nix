@@ -82,7 +82,11 @@ in
   systemd.services.kite-forward = {
     wantedBy = [ "multi-user.target" ];
     after = [ "k3s.service" ];
-    requires = [ "k3s.service" ];
+    # Requires cancels our start job if K3s initially fails (e.g. DHCP has no
+    # default route yet). Restart= cannot recover a job that never executed.
+    # Start independently and retry until the API and Kite pod are available.
+    wants = [ "k3s.service" ];
+    unitConfig.StartLimitIntervalSec = 0;
     serviceConfig = {
       ExecStart = "${config.services.k3s.package}/bin/k3s kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml -n kite-system port-forward --address=127.0.0.1 service/kite 8081:8080";
       Restart = "always";

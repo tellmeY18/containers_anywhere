@@ -10,6 +10,23 @@ import (
 	"testing"
 )
 
+// Hosted CI has no WHPX, so lock the accelerator configuration that physical
+// Windows reported rejecting the emulated CPU model.
+func TestQEMUPlatformPerAccelerator(t *testing.T) {
+	for _, c := range []struct{ accel, arch, console, machine, cpu string }{
+		{"kvm", "amd64", "ttyS0", "q35", "host"},
+		{"whpx", "amd64", "ttyS0", "pc", "host"},
+		{"tcg", "amd64", "ttyS0", "q35", "max"},
+		{"kvm", "arm64", "ttyAMA0", "virt", "host"},
+		{"tcg", "arm64", "ttyAMA0", "virt", "max"},
+	} {
+		console, machine, cpu := qemuPlatform(c.accel, c.arch)
+		if console != c.console || machine != c.machine || cpu != c.cpu {
+			t.Fatalf("%s/%s: got %q/%q/%q want %q/%q/%q", c.accel, c.arch, console, machine, cpu, c.console, c.machine, c.cpu)
+		}
+	}
+}
+
 func TestQEMUDiskArgs(t *testing.T) {
 	for _, c := range []struct {
 		name          string

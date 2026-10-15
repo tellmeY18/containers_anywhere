@@ -77,13 +77,7 @@ func bootVM(bundle, state string, m manifest) (machine, error) {
 	address := l.Addr().String()
 	l.Close() // QEMU owns the listener; TLS pinning makes a port race fail closed.
 	_, port, _ := net.SplitHostPort(address)
-	console, machine, cpu := "ttyS0", "q35", "max"
-	if accel == "kvm" {
-		cpu = "host"
-	}
-	if m.Arch == "arm64" {
-		console, machine = "ttyAMA0", "virt"
-	}
+	console, machine, cpu := qemuPlatform(accel, m.Arch)
 	cpus, memory, err := vmResources()
 	if err != nil {
 		return nil, err
@@ -124,6 +118,25 @@ func bootVM(bundle, state string, m manifest) (machine, error) {
 	v := &qemuVM{done: make(chan struct{}), address: address, tls: config}
 	go func() { cmd.Wait(); output.Close(); os.Remove(secret); close(v.done) }()
 	return v, nil
+}
+
+func qemuPlatform(accel, arch string) (console, machine, cpu string) {
+	console, machine, cpu = "ttyS0", "q35", "max"
+	if accel == "kvm" {
+		cpu = "host"
+	}
+	if accel == "whpx" {
+		// WHPX is a host-passthrough interface, not an emulated CPU: the Windows
+		// hypervisor exposes host features and exits on instructions QEMU's WHPX
+		// model cannot emulate. "-cpu max" is a TCG-only maximal model and makes
+		// the guest take the kernel-APIC interrupt path that WHPX rejects. Use
+		// the i440fx machine and passthrough CPU, as WHPX expects.
+		machine, cpu = "pc", "host"
+	}
+	if arch == "arm64" {
+		console, machine = "ttyAMA0", "virt"
+	}
+	return console, machine, cpu
 }
 
 func qemuDiskArgs(bundle, state string) []string {

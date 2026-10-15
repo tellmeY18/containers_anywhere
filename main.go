@@ -250,15 +250,82 @@ func serve(state, bundle string, port int, noOpen bool) error {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
+	// A hypervisor can leave QEMU alive but paused on an unhandled exit (WHPX
+	// does this instead of exiting), so Done() never fires. Bound the wait and
+	// report the guest console instead of hanging forever.
+	ready := make(chan bool, 1)
+	go func() {
+		deadline := time.NewTimer(bootTimeout())
+		defer deadline.Stop()
+		tick := time.NewTicker(2 * time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ready:
+				return
+			case <-deadline.C:
+				ready <- false
+				return
+			case <-tick.C:
+				if resp, e := client.Get("http://guest/_agent/status"); e == nil {
+					var health struct{ Healthy bool }
+					body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+					resp.Body.Close()
+					if json.Unmarshal(body, &health) == nil && health.Healthy {
+						ready <- true
+						return
+					}
+				}
+			}
+		}
+	}()
+	timeout := time.NewTimer(bootTimeout() + 30*time.Second)
+	defer timeout.Stop()
 	select {
 	case <-signals:
 	case <-done:
+	case healthy := <-ready:
+		if !healthy {
+			return fmt.Errorf("%s", bootDiagnosis(state))
+		}
+	case <-timeout.C:
+		return fmt.Errorf("%s", bootDiagnosis(state))
 	case err := <-errs:
 		return err
 	case <-vm.Done():
 		return errors.New("VM exited; see console.log")
 	}
 	return vm.Close()
+}
+
+// bootTimeout allows slow emulated boots; hardware boots finish far sooner.
+func bootTimeout() time.Duration {
+	if s := os.Getenv("CONTAINERS_BOOT_TIMEOUT"); s != "" {
+		if d, err := time.ParseDuration(s); err == nil && d >= time.Minute {
+			return d
+		}
+	}
+	return 45 * time.Minute
+}
+
+// bootDiagnosis surfaces the guest console, since a paused hypervisor reports
+// its cause there and nowhere else.
+func bootDiagnosis(state string) string {
+	report := "The appliance did not finish starting within the boot timeout."
+	b, err := os.ReadFile(filepath.Join(state, "console.log"))
+	if err != nil {
+		return report
+	}
+	if len(b) > 4096 {
+		b = b[len(b)-4096:]
+	}
+	tail := strings.TrimSpace(string(b))
+	if strings.Contains(tail, "WHPX:") {
+		report += " The Windows hypervisor rejected this VM (WHPX error). Update to the latest release; older builds requested an unsupported emulated CPU model."
+	} else if tail != "" {
+		report += " Last console output:\n" + tail
+	}
+	return report
 }
 
 // Keep the first-admin bootstrap and the guest management routes private, even

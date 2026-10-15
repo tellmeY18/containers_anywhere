@@ -51,7 +51,8 @@ def main():
     timeout = int(os.environ.get("CONTAINERS_SMOKE_BOOT_SECONDS", "600"))
 
     def boot(directory, fresh=False):
-        log = (directory / "smoke.log").open("w")
+        label = "fresh" if fresh else "restart"
+        log = (directory / (label + "-smoke.log")).open("w")
         process = subprocess.Popen([str(binary), "serve", "--state", str(directory), "--bundle", str(bundle), "--port", "0", "--no-open"], stdout=log, stderr=log,
                                    env=dict(os.environ, CONTAINERS_NO_BROWSER="1"))
         c = None
@@ -100,13 +101,16 @@ def main():
             if c and process.poll() is None:
                 try:
                     journal = request(c["URL"]+"/control/logs", c["Token"])
-                    (directory / "guest.log").write_bytes(journal)
+                    (directory / (label + "-guest.log")).write_bytes(journal)
                     request(c["URL"]+"/control/stop", c["Token"], {})
                     process.wait(timeout=180)
                 except Exception as e:
                     print("Graceful shutdown failed:", e, flush=True)
                     process.terminate()
                     process.wait(timeout=180)
+            console = directory / "console.log"
+            if console.exists():
+                (directory / (label + "-console.log")).write_bytes(console.read_bytes())
             log.close()
         assert process.returncode == 0
 
