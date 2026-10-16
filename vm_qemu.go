@@ -82,7 +82,7 @@ func bootVM(bundle, state string, m manifest) (machine, error) {
 	if err != nil {
 		return nil, err
 	}
-	args := []string{"-machine", machine, "-accel", accel, "-cpu", cpu, "-m", fmt.Sprint(memory), "-smp", fmt.Sprint(cpus), "-display", "none", "-monitor", "none", "-serial", "stdio", "-no-reboot",
+	args := []string{"-machine", machine, "-accel", qemuAccelerator(accel), "-cpu", cpu, "-m", fmt.Sprint(memory), "-smp", fmt.Sprint(cpus), "-display", "none", "-monitor", "none", "-serial", "stdio", "-no-reboot",
 		"-L", filepath.Join(runtimeDir, "share", "qemu"),
 		"-kernel", filepath.Join(bundle, m.Kernel), "-initrd", filepath.Join(bundle, m.Initrd),
 		"-append", "console=" + console + " panic=1 init=" + m.System + "/init",
@@ -120,17 +120,24 @@ func bootVM(bundle, state string, m manifest) (machine, error) {
 	return v, nil
 }
 
+func qemuAccelerator(accel string) string {
+	if accel == "whpx" {
+		// QEMU's WHPX irqchip can fail in firmware with VP exit code 4
+		// (reproduced on Windows 11 25H2 / i7-1255U). Emulate only the
+		// interrupt controller; CPU execution remains hardware-accelerated.
+		return "whpx,kernel-irqchip=off"
+	}
+	return accel
+}
+
 func qemuPlatform(accel, arch string) (console, machine, cpu string) {
 	console, machine, cpu = "ttyS0", "q35", "max"
 	if accel == "kvm" {
 		cpu = "host"
 	}
 	if accel == "whpx" {
-		// WHPX is a host-passthrough interface, not an emulated CPU: the Windows
-		// hypervisor exposes host features and exits on instructions QEMU's WHPX
-		// model cannot emulate. "-cpu max" is a TCG-only maximal model and makes
-		// the guest take the kernel-APIC interrupt path that WHPX rejects. Use
-		// the i440fx machine and passthrough CPU, as WHPX expects.
+		// Use the tested i440fx machine and host CPU model. Interrupt-controller
+		// compatibility is configured separately in bootVM.
 		machine, cpu = "pc", "host"
 	}
 	if arch == "arm64" {

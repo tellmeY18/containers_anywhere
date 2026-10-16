@@ -4,6 +4,18 @@ package main
 
 import "testing"
 
+func TestQemuAccelerator(t *testing.T) {
+	for input, want := range map[string]string{
+		"whpx": "whpx,kernel-irqchip=off",
+		"kvm":  "kvm",
+		"tcg":  "tcg",
+	} {
+		if got := qemuAccelerator(input); got != want {
+			t.Fatalf("%s: got %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestQemuPlatform(t *testing.T) {
 	t.Setenv("CONTAINERS_QEMU_MACHINE", "")
 	for _, tc := range []struct{ name, accel, arch, console, machine, cpu string }{
