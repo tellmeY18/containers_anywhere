@@ -115,6 +115,15 @@ jobs:
           tar -xzf dist/appliance-amd64.tar.gz -C dist/acceptance/bundle
           tar -xzf dist/releases/runtime-linux-amd64.tar.gz -C dist/acceptance/qemu
           python scripts/smoke.py --binary dist/releases/stage-linux-amd64/containers-anywhere/containers-anywhere --bundle dist/acceptance/bundle --state dist/smoke --restore
+      # Windows WHPX has no hosted runner, so replay its machine/CPU pair under
+      # KVM. This checks the configuration WHPX depends on, not WHPX itself.
+      - name: Linux KVM boot with the WHPX machine and CPU model
+        if: matrix.platform == 'linux' && matrix.arch == 'amd64'
+        shell: bash
+        env:
+          CONTAINERS_QEMU_MACHINE: pc
+        run: |
+          python scripts/smoke.py --binary dist/releases/stage-linux-amd64/containers-anywhere/containers-anywhere --bundle dist/acceptance/bundle --state dist/smoke-whpx
       - name: Windows emulated VM boot and Kite acceptance
         if: matrix.platform == 'windows'
         shell: bash

@@ -1,12 +1,39 @@
 # Release and cache reconnaissance
 
-Inspected on 2026-10-16. Baseline: successful [build 38889610837](https://github.com/tellmeY18/containers_anywhere/actions/runs/38889610837),
-plus its job logs and the live Actions cache inventory. Changes below require a
-new CI run; predicted savings are not benchmark results.
+Inspected on 2026-10-16. Baseline: successful [build 38889610837](https://github.com/tellmeY18/containers_anywhere/actions/runs/38889610837).
+Verified result: [build 38909720435](https://github.com/tellmeY18/containers_anywhere/actions/runs/38909720435),
+published as `containers-v0.1.0-mvp.49`. Change lists and predictions are not
+benchmark results; only the two tables below are measured.
 
-## Where the time went
+## Measured result: baseline versus verified build
 
-Total build wall time: **43m 47s** (10:48:10–11:31:57 UTC).
+| Work | Baseline (38889610837) | Verified (38909720435) |
+| --- | ---: | ---: |
+| Total wall time | 43m 47s | **31m 01s** (−29%) |
+| Checks job | 0m 56s | 0m 36s |
+| AMD64 appliance | 5m 23s | 4m 06s |
+| ARM64 appliance | 20m 46s | **2m 57s** |
+| macOS package | 4m 10s | 1m 29s |
+| Linux ARM64 package | 1m 55s | 0m 49s |
+| Linux AMD64 boot/restart/restore | 5m 31s | 6m 53s |
+| Windows TCG boot acceptance | 21m 56s | 26m 06s |
+| ARM64 compressed appliance | 877.2 MB | **789.2 MB** (−88.0 MB, −10.0%) |
+| AMD64 compressed appliance | 1,091.6 MB | **1,002.3 MB** (−89.4 MB, −8.2%) |
+| Guest runtime closure (ARM64/AMD64) | not measured | 1.50 GB / 1.31 GB, 372 paths each |
+
+Removing EROFS block deduplication was expected to cost image size. Userspace
+slimming more than paid for it: both appliances shrank while the ARM64 image build
+dropped from 18m 09s to well under three minutes. Two changes landed together, so
+their individual size contributions are not separated; the closure report makes
+that measurable next time.
+
+**Windows TCG acceptance is now 84% of the build.** It grew from 21m 56s to
+26m 06s on identical hardware class, so treat TCG duration as variable rather than
+regressing code. It, not the Nix build, is the next scheduling target.
+
+## Baseline observations that motivated the change
+
+Baseline build 38889610837, 43m 47s (10:48:10–11:31:57 UTC):
 
 | Work | Measured duration | Observation |
 | --- | ---: | --- |
@@ -20,15 +47,12 @@ Total build wall time: **43m 47s** (10:48:10–11:31:57 UTC).
 | Draft preparation run 38894698972 | 3m 11s | Promotes tested artifacts; no rebuild |
 
 The previous matrix dependency made **every package wait for both appliances**.
-AMD64 was ready at 10:54:34 but Windows started only at 11:10:00. With the same job
-durations and runner availability, independent architecture pipelines would finish
-in roughly **28–29 minutes**, saving about **15 minutes** without removing tests.
+AMD64 was ready at 10:54:34 but Windows started only at 11:10:00.
 
 The EROFS flags included `-Ededupe`. The pinned microvm source explicitly selects
-single-threaded erofs-utils when this flag is present. ARM64's long image-build
-interval is observed; dedupe's exact contribution versus runner CPU performance
-still needs an A/B measurement. Python's gzip archive creation is also serial,
-but the ARM64 bundle-build-plus-archive tail was only about 44 seconds in this run.
+single-threaded erofs-utils when this flag is present. Python's gzip archive
+creation is also serial, but the ARM64 bundle-build-plus-archive tail was only
+about 44 seconds, so the archive writer is not a bottleneck.
 
 ## Changes in this pass
 
@@ -45,10 +69,25 @@ but the ARM64 bundle-build-plus-archive tail was only about 44 seconds in this r
   but an exact immutable cache hit could prevent saving newly built paths.
 - Separate build and archive timings; publish per-architecture runtime closure
   inventories and component/download sizes without adding them to release assets.
+  The report prints human-readable sizes (kB/MB/GB) and, for the largest paths,
+  the reference chain that pulled them in, so each reduction is attributable.
 - Install only the native Linux QEMU target, without recommended extra packages.
 - Cancel superseded PR checks; preserve in-flight release builds.
 - Remove the guest's Python secret-generation dependency and unused userspace
   configuration described in [APPLIANCE.md](APPLIANCE.md).
+
+## Windows WHPX coverage without WHPX hardware
+
+GitHub-hosted Windows runners cannot use nested virtualization, so WHPX cannot be
+exercised on hosted runners; Linux hosted runners can, which is why the Linux KVM
+gate runs there today. A self-hosted Windows runner on nested-virt-capable hardware
+(Azure Dv4/Dv5 or Ev5, or EC2 metal) remains the only way to test WHPX itself.
+
+As an interim gate, `CONTAINERS_QEMU_MACHINE=pc` selects the i440fx machine while
+keeping `-cpu host` under KVM, so the configuration WHPX depends on is booted,
+deployed and rebooted on every build. This validates the machine/CPU pair that
+caused the earlier WHPX CPU-model bug. It is **not** WHPX acceptance and must
+never be reported as such.
 
 ## Cache findings and next priorities
 
@@ -66,11 +105,11 @@ but the ARM64 bundle-build-plus-archive tail was only about 44 seconds in this r
    verification and restrict publishing credentials to trusted builds. Inspect quota
    and eviction before increasing store-size limits; cache deletion is not needed
    for correctness.
-3. **Accelerate Windows acceptance with actual WHPX hardware.** The 19-minute TCG
-   test is intrinsically slow. A suitable isolated self-hosted Windows runner can
-   test hardware acceleration and reduce time, but first prove WHPX and retain the
-   current release acceptance until its replacement passes. Do not silently skip
-   the Windows test or count TCG as WHPX coverage.
+3. **Accelerate Windows acceptance with actual WHPX hardware.** TCG is now 84% of
+   the build. A suitable isolated self-hosted Windows runner can test hardware
+   acceleration and reduce time, but first prove WHPX and retain the current release
+   acceptance until its replacement passes. Do not silently skip the Windows test
+   or count the `pc`-machine KVM gate as WHPX coverage.
 4. **Avoid duplicate full builds and documentation-only builds.** Push plus manual
    dispatch can queue the same work; two closely spaced runs were active/pending
    during inspection. Trigger one build per candidate. Add deliberate path filters
@@ -96,23 +135,19 @@ tests and cover different host implementations.
 
 ## Further VM-size work
 
-Use the new closure report to rank actual byte savings. The next candidates are
-disabled-component airgap images (Traefik/ServiceLB/metrics-server), Python/Perl
-retained by transitive references, the generic kernel/module set, and duplicate
-preload/containerd storage. Prove DNS, CNI, local-path helper pods and offline
-restart/restore before pruning images. Kernel/initrd specialization requires macOS,
-Linux ARM64/AMD64 and physical Windows acceptance. Removing the immutable preload
-copy or lowering the sparse disk's logical capacity is not an equivalent safe
+Ranked candidates with measured sizes are in [APPLIANCE.md](APPLIANCE.md). The
+largest is pruning the three disabled airgap images (76.1 MB), then trimming the
+kernel module set (351.6 MB combined with kernel and initrd, which needs a kernel
+build change and the full platform matrix). Perl and `gcc-lib` (78.2 MB) are
+referenced directly by NixOS's own user-activation scripts, so they are not
+removable without replacing user setup. Prove DNS, CNI, local-path helper pods and
+offline restart/restore before pruning images. Removing the immutable preload copy
+or lowering the sparse disk's logical capacity is not an equivalent safe
 download-size optimization.
 
-Required follow-up: CI Go vet/race tests, both Nix builds, all packages, Linux KVM
-fresh boot/workload/reboot/backup/restore and Windows TCG acceptance; then fresh and
-cached/offline startup plus the outstanding real-hardware matrix. Record before/
-after compressed size, system image size, closure bytes and job times. No reduced
-memory minimum, platform boot result or final image-size saving is claimed yet.
-
-Local validation completed: actionlint (including shellcheck), gofmt,
-nixpkgs-fmt, both bundle derivation evaluations, both configurations' assertions,
-and the Python archive/report tests. The Go secret persistence/corruption tests
-are added to the existing CI test suite; Go compilation/race tests and VM boot
-acceptance run in Actions according to repository policy.
+Still outstanding and not addressed by alpha 49: fresh and cached/offline startup
+profiling, guest idle memory/CPU measurement, and physical macOS, Windows WHPX and
+Linux ARM64 acceptance. Alpha 49 passed Go vet/race tests, Python tests, both Nix
+builds, all four packages, Linux KVM fresh boot/workload/reboot/encrypted
+backup/restore and Windows TCG boot acceptance. No reduced memory minimum, WHPX
+boot result or further image-size saving is claimed.

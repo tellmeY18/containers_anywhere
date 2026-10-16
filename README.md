@@ -11,7 +11,7 @@ An independent, application-agnostic project for running cloud-native workloads
 on consumer hardware. The current release is an **alpha**; mission-critical
 durability and disaster recovery are the next engineering milestones.
 
-[Download the alpha](https://github.com/tellmeY18/containers_anywhere/releases/tag/containers-v0.1.0-mvp.42)
+[Download the alpha](https://github.com/tellmeY18/containers_anywhere/releases/tag/containers-v0.1.0-mvp.49)
 · [Recovery architecture](docs/DISASTER_RECOVERY.md)
 · [Roadmap](ROADMAP.md)
 · [Appliance optimization](docs/APPLIANCE.md)
@@ -155,7 +155,7 @@ Artifacts use `0.1.0-mvp.<run-number>`. Launchers point to immutable
 `containers-v<version>` release URLs in the repository that built them. **The
 complete draft must be published before first-run downloads work for users.**
 Actions artifacts alone are useful for local-bundle testing; their future public
-download URLs are not live until publication. Alpha 42 is already published.
+download URLs are not live until publication. Alpha 49 is already published.
 New builds use `tellmeY18/containers_anywhere`; older launchers rely on GitHub's
 redirect from the former repository name. Do not reuse that old repository name.
 
@@ -188,10 +188,10 @@ catalog is included. Kite's GET-only Kube Proxy is a preview facility, not a
 general ingress solution. Keep unrelated/untrusted web applications off the
 management origin. Download hashes authenticate against the launcher build;
 publisher-signed update channels and notarized/signed installers remain release
-hardening work. Alpha 42 downloads are 877 MB (ARM64 appliance), 1.09 GB (AMD64
-appliance), approximately 21 MB (Linux QEMU) and 93 MB (Windows QEMU). Installers
-are 2.5 MB (DMG), 5.0 MB (EXE), and 3.7–4.1 MB (AppImage), in decimal units.
-Idle resource use remains unmeasured; see the optimization plan.
+hardening work. Alpha 49 downloads are 789.2 MB (ARM64 appliance), 1,002.3 MB
+(AMD64 appliance), 19.0–19.2 MB (Linux QEMU) and 93.2 MB (Windows QEMU).
+Installers are 2.5 MB (DMG), 5.0 MB (EXE), and 3.7–4.1 MB (AppImage), in decimal
+units. Idle resource use remains unmeasured; see the optimization plan.
 
 Use Deployments or StatefulSets for long-running workloads: Kubernetes graceful
 node shutdown terminates bare Pods, and only controllers recreate them after boot.

@@ -136,6 +136,11 @@ func qemuPlatform(accel, arch string) (console, machine, cpu string) {
 	if arch == "arm64" {
 		console, machine = "ttyAMA0", "virt"
 	}
+	// WHPX cannot be tested on hosted runners, so CI replays its machine/CPU
+	// pair under KVM with this override. It only selects a QEMU machine type.
+	if override := os.Getenv("CONTAINERS_QEMU_MACHINE"); override != "" {
+		machine = override
+	}
 	return console, machine, cpu
 }
 
