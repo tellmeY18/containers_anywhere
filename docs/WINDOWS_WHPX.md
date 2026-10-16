@@ -61,11 +61,16 @@ and supported Windows configuration on disposable state, then repeat full boot,
 browser, workload, restart and restore acceptance. Do not retry alternate VM
 configurations automatically against a user's disk after a failed boot.
 
-## Consumer prerequisite setup (required, not implemented)
+## Consumer prerequisite setup
 
-The current per-user installer requests no elevation, and `doctor()` checks WHP
-availability but only returns an error when prerequisites are missing. The desired
-first-run experience requires no terminal commands:
+The per-user installer requests no elevation. The desktop now checks WHP before
+downloads and offers a setup button when it is unavailable. Setup elevates only
+the fixed DISM operation, reports cancellation/failure, and records a restart
+marker plus a per-user RunOnce command when Windows requests reboot. The desktop
+offers an explicit restart button and rechecks capability after sign-in. Firmware
+configuration and administrator policy remain support cases.
+
+The broader first-run acceptance target is:
 
 1. Check supported Windows/CPU, available memory and disk space, WHP capabilities,
    feature state and restart requirements before downloading the appliance.

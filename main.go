@@ -37,6 +37,9 @@ type manifest struct {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "setup-system" {
+		os.Exit(runSystemSetup())
+	}
 	if err := run(); err != nil {
 		log.Print(err)
 		os.Exit(1)
@@ -124,6 +127,14 @@ func saveJSON(path string, v any) error {
 }
 
 func serve(state, bundle string, port int, noOpen bool) error {
+	if pendingSetupRestart(state) {
+		return errors.New("restart Windows to finish setup before starting the cluster")
+	}
+	if os.Getenv("CONTAINERS_QEMU_ACCEL") != "tcg" {
+		if err := doctor(); err != nil {
+			return err
+		}
+	}
 	if _, _, err := vmResources(); err != nil {
 		return err
 	}
@@ -325,7 +336,7 @@ func bootDiagnosis(state string) string {
 	}
 	tail := strings.TrimSpace(string(b))
 	if strings.Contains(tail, "WHPX:") {
-		report += " The Windows hypervisor rejected this VM (WHPX error). Update to the latest release; older builds requested an unsupported emulated CPU model."
+		report += " QEMU reported a Windows hypervisor (WHPX) error. Save Diagnostics for support; a running QEMU process does not mean the guest booted successfully."
 	} else if tail != "" {
 		report += " Last console output:\n" + tail
 	}

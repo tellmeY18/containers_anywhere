@@ -122,12 +122,23 @@ func desktop(state, bundle string) error {
 	var child *exec.Cmd
 	var childDone chan struct{}
 	phase, detail := "stopped", "Your cluster is stopped. Data stays on this computer."
+	setupRequired, restartRequired := false, pendingSetupRestart(state)
 	start := func() error {
 		mu.Lock()
 		defer mu.Unlock()
 		if child != nil {
 			return errors.New("cluster is already starting or running")
 		}
+		if restartRequired {
+			return errors.New("restart Windows to finish setup, then reopen Containers Anywhere")
+		}
+		if os.Getenv("CONTAINERS_QEMU_ACCEL") != "tcg" {
+			if err := doctor(); err != nil {
+				setupRequired = runtime.GOOS == "windows"
+				return err
+			}
+		}
+		setupRequired = false
 		exe, err := os.Executable()
 		if err != nil {
 			return err
@@ -211,7 +222,9 @@ func desktop(state, bundle string) error {
 			mu.Lock()
 			p, d, running := phase, detail, child != nil
 			mu.Unlock()
-			s := map[string]any{"phase": p, "detail": d, "state": state}
+			mu.Lock()
+			s := map[string]any{"phase": p, "detail": d, "state": state, "setupRequired": setupRequired, "restartRequired": restartRequired}
+			mu.Unlock()
 			if running {
 				if b, err := os.ReadFile(filepath.Join(state, "progress.json")); err == nil {
 					var progress string
@@ -260,6 +273,43 @@ func desktop(state, bundle string) error {
 		defer operation.Unlock()
 		var err error
 		switch r.URL.Path {
+		case "/setup":
+			mu.Lock()
+			allowed := setupRequired && child == nil && !restartRequired
+			if allowed {
+				phase, detail = "setup", "Approve the Windows administrator prompt. Installing required Windows components…"
+			}
+			mu.Unlock()
+			if !allowed {
+				err = errors.New("Windows setup is not needed or the cluster is active")
+				break
+			}
+			restart, setupErr := setupWindowsHost(state)
+			mu.Lock()
+			restartRequired = restart
+			if restart {
+				setupRequired = false
+				phase, detail = "restart required", "Save your work, then restart Windows. Setup will resume after you sign in. You can also restart later."
+			} else if setupErr == nil {
+				setupRequired = false
+				phase, detail = "stopped", "Windows setup is complete. Choose Start to prepare your cluster."
+			} else {
+				phase, detail = "setup needed", setupErr.Error()
+			}
+			if setupErr != nil {
+				detail = setupErr.Error()
+			}
+			mu.Unlock()
+			err = setupErr
+		case "/restart":
+			mu.Lock()
+			allowed := restartRequired && child == nil
+			mu.Unlock()
+			if !allowed {
+				err = errors.New("no setup restart is pending or the cluster is active")
+				break
+			}
+			err = restartWindowsHost()
 		case "/start":
 			err = start()
 		case "/stop":
@@ -318,8 +368,9 @@ const desktopHTML = `<!doctype html><html lang="en"><meta charset="utf-8"><meta 
 <style>body{font:17px system-ui;max-width:760px;margin:8vh auto;padding:24px;background:#101827;color:#e2e8f0}button,a{font:inherit;padding:12px 18px;border:0;border-radius:8px;background:#34d399;color:#10251b;cursor:pointer;display:inline-block;margin:6px 4px 6px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}small{color:#94a3b8}[hidden]{display:none}</style>
 <h1>Containers Anywhere</h1><p>Your Kubernetes. On this computer.</p><h2 id="phase">Starting</h2><p id="detail" role="status">Preparing your appliance…</p>
 <a id="kite" hidden target="_blank" rel="noopener noreferrer">Open Kite</a><button id="start">Start / Retry</button><button id="stop">Stop cluster</button><button id="quit">Quit</button><button id="logs">Diagnostics</button>
+<button id="setup" hidden>Set up this computer</button><button id="restart" hidden>Restart Windows now</button>
 <p><small>The first launch downloads a verified VM and, on Linux/Windows, its QEMU runtime. Closing this tab keeps your cluster running. New workloads may require internet access.</small></p><pre id="output"></pre>
 <script>let token=location.hash.slice(1)||sessionStorage.getItem('token');if(token){sessionStorage.setItem('token',token);history.replaceState(null,'',location.pathname)}
 async function call(path,method='GET'){let r=await fetch('/'+path,{method,headers:{Authorization:'Bearer '+token}});let text=await r.text();if(!r.ok)throw Error(text);return text}
-let opened=false;async function poll(){try{let s=JSON.parse(await call('status'));document.getElementById('phase').textContent=s.phase;document.getElementById('detail').textContent=s.detail;let a=document.getElementById('kite');a.hidden=!s.kiteURL;if(s.kiteURL){a.href=s.kiteURL;if(!opened){opened=true;document.title='Ready — Containers Anywhere'}}}catch(e){document.getElementById('detail').textContent=e.message}setTimeout(poll,2500)}
-for(let name of ['start','stop','quit','logs'])document.getElementById(name).onclick=async()=>{try{let text=await call(name,name==='logs'?'GET':'POST');document.getElementById('output').textContent=text}catch(e){document.getElementById('output').textContent=e.message}};poll();</script></html>`
+let opened=false;async function poll(){try{let s=JSON.parse(await call('status'));document.getElementById('phase').textContent=s.phase;document.getElementById('detail').textContent=s.detail;document.getElementById('setup').hidden=!s.setupRequired;document.getElementById('restart').hidden=!s.restartRequired;document.getElementById('start').disabled=s.setupRequired||s.restartRequired||s.phase==='setup';let a=document.getElementById('kite');a.hidden=!s.kiteURL;if(s.kiteURL){a.href=s.kiteURL;if(!opened){opened=true;document.title='Ready — Containers Anywhere'}}}catch(e){document.getElementById('detail').textContent=e.message}setTimeout(poll,2500)}
+for(let name of ['start','stop','quit','logs','setup','restart'])document.getElementById(name).onclick=async()=>{if(name==='restart'&&!confirm('Save your work first. Restart Windows now?'))return;try{let text=await call(name,name==='logs'?'GET':'POST');document.getElementById('output').textContent=text}catch(e){document.getElementById('output').textContent=e.message}};poll();</script></html>`

@@ -54,6 +54,13 @@ is available without FUSE. macOS builds are ad-hoc signed unless distribution
 credentials are configured; Windows installers are unsigned. Never disable OS
 security globally or run the launcher as root to work around virtualization access.
 
+On Windows, missing virtualization support is detected before appliance downloads.
+Choose **Set up this computer**, approve the Windows administrator prompt, and
+restart if requested. Setup enables Windows Hypervisor Platform using Windows'
+built-in tools; ordinary cluster execution remains unelevated. Firmware settings
+or administrator policies may still require assistance. Windows uses a WHPX
+interrupt-controller compatibility setting while retaining hardware CPU execution.
+
 ## What is shipped
 
 ```text
