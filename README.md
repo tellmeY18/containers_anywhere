@@ -15,6 +15,7 @@ durability and disaster recovery are the next engineering milestones.
 · [Recovery architecture](docs/DISASTER_RECOVERY.md)
 · [Roadmap](ROADMAP.md)
 · [Appliance optimization](docs/APPLIANCE.md)
+· [Workload gateway setup](docs/NETWORKING.md)
 
 CARE Anywhere's original code and documentation are preserved on
 [`archive/care-anywhere`](https://github.com/tellmeY18/containers_anywhere/tree/archive/care-anywhere).
@@ -74,7 +75,7 @@ DMG / EXE / AppImage                 Separate downloadable assets
 The immutable NixOS system image contains K3s/containerd, its airgap images,
 Kite's preloaded container image, and a small guest agent. There is no runtime
 `pip install` or `npm install`. K3s starts with SQLite, CoreDNS, Flannel and
-local-path storage; Traefik, ServiceLB and metrics-server are disabled. Additional
+local-path storage; packaged Traefik, ServiceLB and metrics-server are disabled. Additional
 workloads and optional Kite plugins pull from registries as needed.
 
 Kite runs as a pod with cluster-admin permissions because this MVP is a
@@ -83,7 +84,7 @@ Installation-specific JWT/encryption keys, Kite SQLite/plugins, K3s state,
 container images and local-path volumes live on the writable `/var/lib` disk.
 The node password also persists across boots. No shared secrets ship in images.
 
-Host control and browser listeners bind only to `127.0.0.1`. macOS uses vsock;
+Host control and Kite browser listeners bind only to `127.0.0.1`. macOS uses vsock;
 QEMU uses per-boot mutual TLS through one loopback forward. Browser access to Kite
 requires a private per-boot launcher capability as well as Kite authentication.
 Management uses a separate origin. WebSocket upgrades for Kite terminals/logs
@@ -183,13 +184,18 @@ python3 scripts/package.py macos --arch arm64 --version 0.1.0-mvp.1 \
 
 ## MVP boundaries
 
+The source tree includes a native Caddy/Traefik gateway with a preloaded branded
+demo.local workload and host-side IPv4 mDNS, pending CI and real-platform
+acceptance. See [networking setup](docs/NETWORKING.md) for address, port, firewall
+and certificate requirements. This is not part of already-published alpha 49.
+
 This is a local single-node environment, not a highly available cluster or a
 production-certified consumer runtime. Internet is needed for initial downloads
 and uncached workloads. Single-node local-path volumes cannot survive loss of
 the host disk without a backup. Cloud load balancers, storage integrations and
 architecture-specific workloads may need adaptation.
 
-No general TCP/UDP/LAN forwarding, host kubeconfig export, automatic updates,
+No general arbitrary TCP/UDP forwarding, host kubeconfig export, automatic updates,
 scheduled backups, suspend/resume acceptance, full Prometheus stack or application
 catalog is included. Kite's GET-only Kube Proxy is a preview facility, not a
 general ingress solution. Keep unrelated/untrusted web applications off the

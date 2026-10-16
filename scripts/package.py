@@ -12,6 +12,7 @@ import tarfile
 from urllib.parse import urlparse
 
 from runtime import stage_runtime, download
+from caddy import stage_caddy
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -81,6 +82,8 @@ def main():
             "CFBundleShortVersionString": args.version.split("-")[0], "CFBundleExecutable": binary.name,
             "CFBundlePackageType": "APPL", "LSMinimumSystemVersion": "13.0", "LSUIElement": True,
             "NSHighResolutionCapable": True, "LSApplicationCategoryType": "public.app-category.developer-tools",
+            "NSLocalNetworkUsageDescription": "Publish the appliance demo and approved workloads on your local network.",
+            "NSBonjourServices": ["_http._tcp", "_https._tcp"],
         }))
         (stage / "Applications").symlink_to("/Applications")
     else:
@@ -90,6 +93,10 @@ def main():
         binary = app / ("containers-anywhere.exe" if args.platform == "windows" else "containers-anywhere")
         if args.platform == "windows":
             flags += ["-H=windowsgui"]
+    helper = stage_caddy(args.platform, args.arch, binary.parent, resources if args.platform == "macos" else None)
+    if args.platform == "macos":
+        run("codesign", "--force", "--sign", os.environ.get("MACOS_SIGN_IDENTITY", "-"), "--options", "runtime", str(helper))
+    flags += ["-X", f"main.caddySHA256={digest(helper)}"]
     env = dict(os.environ, GOARCH=args.arch)
     if args.platform != "macos":
         env.update(GOOS=args.platform, CGO_ENABLED="0")

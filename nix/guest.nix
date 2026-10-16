@@ -11,12 +11,14 @@ let
         ../go.sum
       ];
     };
-    vendorHash = "sha256-dZunFx7sqR/OV63bf5MSse7Qmtu994+qOwu1+yInaCI=";
+    vendorHash = "sha256-LnhRtNunYUntDnrP9g7POtGablJbcrkK5eY2AOCcIfM=";
     env.CGO_ENABLED = "0";
     ldflags = [ "-s" "-w" ];
     doCheck = false;
   };
   kite = import ./kite.nix { inherit pkgs; };
+  gateway = import ./traefik.nix { inherit pkgs; };
+  demo = import ./demo.nix { inherit pkgs; };
 in
 {
   imports = [ "${modulesPath}/profiles/minimal.nix" "${modulesPath}/profiles/headless.nix" ];
@@ -67,6 +69,9 @@ in
   boot.kernelModules = [ "vmw_vsock_virtio_transport" "virtio_net" "qemu_fw_cfg" "virtio_balloon" "overlay" "br_netfilter" ];
   boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
   networking.useDHCP = true;
+  # Stable source identity for the node's authenticated workload relay. It is
+  # not a LAN/VM listener and is never forwarded by QEMU or Virtualization.framework.
+  networking.interfaces.lo.ipv4.addresses = [{ address = "169.254.254.1"; prefixLength = 32; }];
   networking.firewall = {
     enable = true;
     allowedTCPPorts = [ 8080 ]; # Per-boot mTLS guest agent, never raw Kubernetes.
@@ -80,8 +85,11 @@ in
     disable = [ "traefik" "servicelb" "metrics-server" ];
     extraFlags = [ "--write-kubeconfig-mode=0600" "--secrets-encryption" ];
     gracefulNodeShutdown.enable = true;
-    images = [ config.services.k3s.package.airgap-images kite ];
+    images = [ config.services.k3s.package.airgap-images kite gateway.image demo ];
     manifests.kite.source = ./kite.yaml;
+    manifests.gateway.source = gateway.manifest;
+    manifests.demo.source = pkgs.writeText "demo.yaml" (builtins.replaceStrings
+      [ "@CADDY_VERSION@" ] [ pkgs.caddy.version ] (builtins.readFile ./demo.yaml));
   };
   # The root filesystem is disposable. Retain the node password across boots,
   # alongside the cluster database, containerd images and local-path volumes.

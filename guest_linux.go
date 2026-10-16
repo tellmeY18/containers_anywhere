@@ -40,6 +40,9 @@ func guestMain() error {
 	}
 	defer listener.Close()
 	mux := http.NewServeMux()
+	gateway := &guestGateway{}
+	go gateway.refresh(context.Background())
+	gateway.routes(mux)
 	mux.HandleFunc("GET /_agent/logs", func(w http.ResponseWriter, r *http.Request) {
 		cmd := exec.CommandContext(r.Context(), "journalctl", "--no-pager", "-n", "200", "-u", "k3s", "-u", "kite-secrets", "-u", "kite-forward", "-u", "containers-agent")
 		cmd.Stdout, cmd.Stderr = w, w

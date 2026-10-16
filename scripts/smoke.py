@@ -43,9 +43,12 @@ def main():
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--restore", action="store_true")
+    parser.add_argument("--gateway", action="store_true", help="accept packaged Caddy and preloaded Traefik")
     args = parser.parse_args()
     binary, bundle, state = args.binary.resolve(), args.bundle.resolve(), args.state.resolve()
     state.mkdir()  # Never use existing user data.
+    gateway_root = None
+    (state / "gateway.json").write_text(json.dumps({"port": 18443, "httpPort": 18080, "namespaces": ["default"], "domains": ["default.localhost"]}))
     admin = {"username": "mvptest", "password": secrets.token_urlsafe(24), "enableAnalytics": False}
     marker = None
     timeout = int(os.environ.get("CONTAINERS_SMOKE_BOOT_SECONDS", "600"))
@@ -90,12 +93,46 @@ def main():
                 ]
                 for resource in resources:
                     request(c["AppURL"]+"/api/v1/resources/apply", data={"yaml": json.dumps(resource), "namespace": "default"}, opener=browser)
+                if args.gateway:
+                    ingress = {"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": {"name": "mvp-web", "namespace": "default"},
+                               "spec": {"ingressClassName": "containers-anywhere", "rules": [{"host": "app.default.localhost", "http": {"paths": [{"path": "/", "pathType": "Prefix", "backend": {"service": {"name": "mvp-web", "port": {"number": 8080}}}}]}}]}}
+                    request(c["AppURL"]+"/api/v1/resources/apply", data={"yaml": json.dumps(ingress), "namespace": "default"}, opener=browser)
             nonlocal marker
             observed = wait_for(lambda: request(c["AppURL"]+"/api/v1/namespaces/default/services/mvp-web:8080/proxy/", opener=browser), process, timeout)
             if fresh:
                 marker = observed
             else:
                 assert observed == marker, "PVC contents changed after reboot/restore"
+            if args.gateway:
+                wait_for(lambda: "https://app.default.localhost:18443" in json.loads(request(c["URL"]+"/control/gateway", c["Token"])).get("urls", []), process, timeout)
+                # curl uses --resolve so .localhost DNS support is not assumed.
+                # First contact triggers certificate issuance, without trusting it.
+                target = "https://app.default.localhost:18443/"
+                base = ["curl", "--silent", "--show-error", "--fail", "--noproxy", "*", "--max-time", "20", "--resolve", "app.default.localhost:18443:127.0.0.1"]
+                root = directory / "gateway/caddy/pki/authorities/local/root.crt"
+
+                def gateway_ready():
+                    # Fetching the root from local protected storage is the trust
+                    # bootstrap; no OS trust store is changed by the smoke test.
+                    if not root.exists():
+                        subprocess.run(base + [target], capture_output=True)
+                        return False
+                    result = subprocess.run(base + ["--cacert", str(root), target], capture_output=True)
+                    return result.returncode == 0 and result.stdout == marker
+
+                wait_for(gateway_ready, process, timeout)
+                demo = subprocess.run(["curl", "--silent", "--show-error", "--fail", "--noproxy", "*", "--max-time", "20",
+                                       "--resolve", "demo.local:18080:127.0.0.1", "http://demo.local:18080/"], capture_output=True)
+                assert demo.returncode == 0 and b"Containers Anywhere works." in demo.stdout, "Preloaded demo did not traverse Caddy/Traefik"
+                nonlocal gateway_root
+                if gateway_root is None:
+                    gateway_root = root.read_bytes()
+                else:
+                    assert root.read_bytes() == gateway_root, "Caddy CA changed across restart/restore"
+                for path in ["/_agent/status", "/_agent/stop", "/control/stop"]:
+                    result = subprocess.run(base + ["--cacert", str(root), target.rstrip("/")+path], capture_output=True)
+                    assert result.returncode != 0, "Workload gateway exposed appliance management"
+                print("PASS: Caddy trusted HTTPS, Traefik Ingress, management isolation and persistent CA", flush=True)
             print("PASS: Kite auth, local cluster, workload HTTP and persistent volume", flush=True)
         finally:
             if c and process.poll() is None:

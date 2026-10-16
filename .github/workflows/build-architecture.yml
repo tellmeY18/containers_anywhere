@@ -114,7 +114,7 @@ jobs:
           mkdir -p dist/acceptance/bundle dist/acceptance/qemu
           tar -xzf dist/appliance-amd64.tar.gz -C dist/acceptance/bundle
           tar -xzf dist/releases/runtime-linux-amd64.tar.gz -C dist/acceptance/qemu
-          python scripts/smoke.py --binary dist/releases/stage-linux-amd64/containers-anywhere/containers-anywhere --bundle dist/acceptance/bundle --state dist/smoke --restore
+          python scripts/smoke.py --binary dist/releases/stage-linux-amd64/containers-anywhere/containers-anywhere --bundle dist/acceptance/bundle --state dist/smoke --restore --gateway
       # Windows WHPX has no hosted runner, so replay its machine/CPU pair under
       # KVM. This checks the configuration WHPX depends on, not WHPX itself.
       - name: Linux KVM boot with the WHPX machine and CPU model
@@ -124,6 +124,12 @@ jobs:
           CONTAINERS_QEMU_MACHINE: pc
         run: |
           python scripts/smoke.py --binary dist/releases/stage-linux-amd64/containers-anywhere/containers-anywhere --bundle dist/acceptance/bundle --state dist/smoke-whpx
+      # No hosted runner has WHPX, so this replays the Windows VM under TCG.
+      # The gateway path is deliberately not repeated here: Traefik, the demo
+      # pod and TLS issuance all cost emulated CPU, and the network path itself
+      # is platform-independent host code already covered by the Linux KVM step
+      # above. Packaged caddy.exe is still validated by the Caddy step below,
+      # which needs no VM. Pass --gateway once a WHPX runner exists.
       - name: Windows emulated VM boot and Kite acceptance
         if: matrix.platform == 'windows'
         shell: bash
@@ -136,6 +142,22 @@ jobs:
           tar -xzf dist/appliance-amd64.tar.gz -C dist/acceptance/bundle
           tar -xzf dist/releases/runtime-windows-amd64.tar.gz -C dist/acceptance/qemu
           python scripts/smoke.py --binary dist/releases/stage-windows-amd64/containers-anywhere/containers-anywhere.exe --bundle dist/acceptance/bundle --state dist/smoke
+      - name: Validate generated configuration with packaged Caddy
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          export CONTAINERS_TEST_CADDY_CONFIG="$RUNNER_TEMP/caddy-config.json"
+          go test -run '^TestCaddyConfigHasNoPublicManagement$' .
+          if [ "$PLATFORM" = macos ]; then
+            helper="dist/releases/stage-macos-$ARCH/Containers Anywhere.app/Contents/MacOS/caddy"
+          elif [ "$PLATFORM" = windows ]; then
+            helper="dist/releases/stage-windows-$ARCH/containers-anywhere/caddy.exe"
+          else
+            helper="dist/releases/stage-linux-$ARCH/containers-anywhere/caddy"
+          fi
+          "$helper" validate --config "$CONTAINERS_TEST_CADDY_CONFIG"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:

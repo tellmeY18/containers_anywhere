@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Containers Anywhere works</title>
+<style>
+  :root{font-family:system-ui,sans-serif;color:#e2e8f0;background:#101827}
+  body{max-width:800px;margin:8vh auto;padding:24px;line-height:1.6}
+  .brand{color:#6ee7b7;font-weight:700;letter-spacing:.06em}
+  h1{font-size:clamp(2rem,7vw,3.5rem);line-height:1.15}
+  .flow{border:1px solid #475569;border-radius:12px;padding:20px;background:#172234}
+  code{overflow-wrap:anywhere;color:#6ee7b7}
+  li{margin:.7rem 0}small{color:#cbd5e1}
+</style>
+<main>
+  <p class="brand">CONTAINERS ANYWHERE</p>
+  <h1>Containers Anywhere works.</h1>
+  <p>Your browser reached a real workload running inside the appliance.</p>
+  <p class="flow">Browser → native Caddy → authenticated VM bridge → Traefik → demo Caddy pod</p>
+  <p>This page is served by a preloaded Kubernetes Deployment, not by the desktop
+  launcher. It needs no external fonts, scripts, images, or internet connection.</p>
+  <h2>Bring your own workload</h2>
+  <ol>
+    <li>Deploy your application and a Kubernetes Service through Kite or your workload manager.</li>
+    <li>Have the appliance owner approve your namespace and hostname suffix.</li>
+    <li>Create an Ingress with <code>ingressClassName: containers-anywhere</code>.
+    The appliance provides local HTTPS; Traefik routes requests to your Service.</li>
+  </ol>
+  <h2>What this page proves</h2>
+  <p>A successful request proves the application traffic path is responding.
+  Reaching it from a second device using <code>demo.local</code>, without a hosts
+  override, additionally exercises LAN reachability and name resolution.</p>
+  <p>This non-sensitive demo is also available over HTTP so a new device can
+  verify connectivity before certificate enrollment. Applications use HTTPS.
+  To enable trusted HTTPS, obtain <a href="/root.crt">this installation's public
+  CA certificate</a> from your appliance administrator and install it through
+  your device's trust settings. Verify its identity with the administrator;
+  an HTTP download alone does not authenticate a certificate.</p>
+  <small>No telemetry. No credentials. No patient data. This public demo is not a
+  management console or a production-readiness certification.</small>
+</main>
+</html>

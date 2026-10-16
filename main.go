@@ -82,6 +82,22 @@ func run() error {
 		return backup(*state, *file)
 	case "restore":
 		return restore(*state, *file, *key)
+	case "gateway-configure":
+		return configureGateway(*state, *file)
+	case "gateway-helper":
+		return runGatewayHelper(*state, *file)
+	case "gateway-status":
+		c, err := readControl(*state)
+		if err != nil {
+			return err
+		}
+		b, err := controlCall(c, "GET", "/control/gateway", nil, 10*time.Second)
+		if err == nil {
+			_, err = os.Stdout.Write(b)
+		}
+		return err
+	case "demo-check":
+		return checkLANDemo()
 	case "status", "stop", "logs":
 		c, err := readControl(*state)
 		if err != nil {
@@ -97,7 +113,7 @@ func run() error {
 		}
 		return err
 	default:
-		return errors.New("commands: desktop, serve, doctor, status, stop, logs, backup, restore")
+		return errors.New("commands: desktop, serve, doctor, status, stop, logs, backup, restore, gateway-configure, gateway-status, demo-check")
 	}
 }
 
@@ -195,6 +211,11 @@ func serve(state, bundle string, port int, noOpen bool) error {
 	transport := &http.Transport{DialContext: vm.Dial, ResponseHeaderTimeout: 30 * time.Second}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 30 * time.Second}
+	gateway, err := startGateway(state, vm)
+	if err != nil {
+		return err
+	}
+	defer gateway.Close()
 	target, _ := url.Parse("http://guest")
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.Transport = transport
@@ -221,6 +242,15 @@ func serve(state, bundle string, port int, noOpen bool) error {
 			return
 		}
 		name := strings.TrimPrefix(r.URL.Path, "/control/")
+		if name == "gateway" && r.Method == "GET" {
+			w.Header().Set("Content-Type", "application/json")
+			if gateway == nil {
+				io.WriteString(w, `{"enabled":false}`)
+			} else {
+				json.NewEncoder(w).Encode(gateway.status())
+			}
+			return
+		}
 		if !(r.Method == "GET" && (name == "status" || name == "logs")) && !(r.Method == "POST" && name == "stop") {
 			http.NotFound(w, r)
 			return
@@ -302,7 +332,8 @@ func serve(state, bundle string, port int, noOpen bool) error {
 			if !healthy {
 				return fmt.Errorf("%s", bootDiagnosis(state))
 			}
-			ready = nil // Already healthy; stop watching readiness.
+			ready = nil    // Already healthy; stop watching readiness.
+			timeout.Stop() // Serving is long-lived, not bounded by the boot deadline.
 		case <-timeout.C:
 			return fmt.Errorf("%s", bootDiagnosis(state))
 		case err := <-errs:

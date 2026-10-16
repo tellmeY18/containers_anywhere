@@ -158,7 +158,22 @@ func backup(state, file string) error {
 	if _, e = os.Lstat(filepath.Join(state, "update.json")); !os.IsNotExist(e) {
 		return errors.New("update is unconfirmed; recover the pre-update snapshot before backing up")
 	}
+	// A surviving gateway supervisor must finish reaping Caddy before its CA
+	// store can be read, even if the original launcher crashed.
+	if _, e = os.Stat(filepath.Join(state, "gateway-lock")); e == nil {
+		unlockGateway, err := lockState(filepath.Join(state, "gateway-lock"))
+		if err != nil {
+			return err
+		}
+		defer unlockGateway()
+	} else if !os.IsNotExist(e) {
+		return e
+	}
 	id, e := age.GenerateX25519Identity()
+	names, memberErr := backupMembers(state)
+	if memberErr != nil {
+		return memberErr
+	}
 	if e != nil {
 		return e
 	}
@@ -204,7 +219,14 @@ func backup(state, file string) error {
 	}
 	gz := gzip.NewWriter(encrypted)
 	tw := tar.NewWriter(gz)
-	for _, name := range []string{"release.json", "data.img"} {
+	for _, name := range names {
+		info, e := os.Lstat(filepath.Join(state, filepath.FromSlash(name)))
+		if e != nil {
+			return e
+		}
+		if !info.Mode().IsRegular() || !validBackupMember(name, info.Size()) {
+			return errors.New("invalid backup member")
+		}
 		f, e := os.Open(filepath.Join(state, name))
 		if e != nil {
 			return e
@@ -285,6 +307,7 @@ func restore(state, file, keyPath string) error {
 	defer os.RemoveAll(stage)
 	tr := tar.NewReader(gz)
 	seen := map[string]bool{}
+	var metadataBytes int64
 	for {
 		h, e := tr.Next()
 		if e == io.EOF {
@@ -293,10 +316,19 @@ func restore(state, file, keyPath string) error {
 		if e != nil {
 			return e
 		}
-		if (h.Name != "data.img" && h.Name != "release.json") || seen[h.Name] || h.Typeflag != tar.TypeReg || h.Size < 0 || h.Size > 64<<30 {
+		if !validBackupMember(h.Name, h.Size) || seen[h.Name] || h.Typeflag != tar.TypeReg || len(seen) >= 4096 {
 			return errors.New("invalid backup member")
 		}
+		if h.Name != "data.img" {
+			metadataBytes += h.Size
+			if metadataBytes > 64<<20 {
+				return errors.New("backup metadata exceeds limit")
+			}
+		}
 		seen[h.Name] = true
+		if e := os.MkdirAll(filepath.Dir(filepath.Join(stage, filepath.FromSlash(h.Name))), 0700); e != nil {
+			return e
+		}
 		f, e := os.OpenFile(filepath.Join(stage, h.Name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 		if e != nil {
 			return e
@@ -313,7 +345,7 @@ func restore(state, file, keyPath string) error {
 	if _, e = io.Copy(io.Discard, gz); e != nil {
 		return e
 	} // Verify trailing AEAD/gzip data before publication.
-	if len(seen) != 2 {
+	if !seen["data.img"] || !seen["release.json"] {
 		return errors.New("incomplete backup")
 	}
 	var m manifest
@@ -327,9 +359,36 @@ func restore(state, file, keyPath string) error {
 	if m.Arch != runtime.GOARCH {
 		return errors.New("cold disk restore requires matching architecture; use a logical export to migrate architectures")
 	}
+	if seen["gateway.json"] {
+		b, e := os.ReadFile(filepath.Join(stage, "gateway.json"))
+		if e != nil {
+			return e
+		}
+		var cfg gatewayConfig
+		if e = decodeGatewayConfig(b, &cfg); e != nil {
+			return e
+		}
+		if e = cfg.validate(); e != nil {
+			return e
+		}
+	}
 	// Publish identity first. Interrupted publication refuses to create an empty cluster.
 	if e = atomicWrite(filepath.Join(state, "release.json"), b, 0600); e != nil {
 		return e
+	}
+	for _, name := range []string{"gateway", "gateway.json"} {
+		if _, e := os.Stat(filepath.Join(stage, name)); e == nil {
+			if name == "gateway" {
+				if e = privateGatewayDir(filepath.Join(stage, name)); e != nil {
+					return e
+				}
+			}
+			if e = os.Rename(filepath.Join(stage, name), filepath.Join(state, name)); e != nil {
+				return e
+			}
+		} else if !os.IsNotExist(e) {
+			return e
+		}
 	}
 	if e = os.Rename(filepath.Join(stage, "data.img"), filepath.Join(state, "data.img")); e != nil {
 		return e

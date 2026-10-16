@@ -11,8 +11,10 @@ in ROADMAP.md. Planned recovery features must not be described as implemented.
   K3s/containerd, node identity, Kite SQLite/plugins/keys and local-path volumes.
 - Preload K3s/Kite at build time. Workloads may pull images at runtime; handle
   connectivity failures. No runtime language package installation.
-- Never expose unauthenticated management or bind host listeners to the LAN.
-  Preserve vsock/per-boot mTLS and separate host control/browser capabilities.
+- Management listeners remain loopback-only and authenticated. Workload gateways
+  may bind configured LAN interfaces; never implicitly expose Kubernetes, Kite,
+  Caddy administration or launcher control. Preserve vsock/per-boot mTLS and
+  separate host control/browser capabilities. Advertise only reachable endpoints.
 - Never weaken bundle hashes, download pins, archive traversal/link rejection,
   data locks, refuse-overwrite backups or empty-destination restore.
 - VM changes must remain buildable on Darwin ARM64, Linux ARM64/AMD64 and Windows

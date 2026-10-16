@@ -1,0 +1,179 @@
+# Independently managed workload, not K3s's bundled Traefik/ServiceLB.
+# Binary version and source are pinned by flake.lock; image is preloaded.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: containers-gateway
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: traefik
+  namespace: containers-gateway
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: containers-gateway-traefik
+rules:
+  - apiGroups: [""]
+    resources: [services, endpoints, secrets, nodes]
+    verbs: [get, list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses, ingressclasses]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: containers-gateway-traefik
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: containers-gateway-traefik
+subjects:
+  - kind: ServiceAccount
+    name: traefik
+    namespace: containers-gateway
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: containers-anywhere
+spec:
+  controller: traefik.io/ingress-controller
+---
+# A namespace owns only <name>.<namespace>.localhost or <name>.<namespace>.local.
+# No annotations that could enable cross-provider routing or forwarded-header
+# changes; no catch-all routes. Host publication is a second, independent grant.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: containers-gateway-routes
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [networking.k8s.io]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [ingresses]
+  matchConditions:
+    - name: appliance-class
+      expression: "(has(object.spec.ingressClassName) && object.spec.ingressClassName == 'containers-anywhere') || (has(object.metadata.annotations) && 'kubernetes.io/ingress.class' in object.metadata.annotations && object.metadata.annotations['kubernetes.io/ingress.class'] == 'containers-anywhere')"
+  validations:
+    - expression: "has(object.spec.ingressClassName) && object.spec.ingressClassName == 'containers-anywhere'"
+      message: Explicit ingressClassName is required.
+    - expression: "!object.metadata.namespace.startsWith('kube-') && !(object.metadata.namespace in ['kite-system', 'containers-gateway'])"
+      message: Management namespaces cannot publish application routes.
+    - expression: "!has(object.spec.defaultBackend) && has(object.spec.rules) && size(object.spec.rules) > 0"
+      message: Explicit hostname rules are required; default backends are forbidden.
+    - expression: "object.spec.rules.all(r, has(r.host) && r.host.matches('^[a-z0-9][a-z0-9.-]*$') && (r.host.endsWith('.' + object.metadata.namespace + '.localhost') || r.host.endsWith('.' + object.metadata.namespace + '.local') || (object.metadata.namespace == 'containers-demo' && object.metadata.name == 'demo' && r.host in ['demo.local', 'demo.localhost'])))"
+      message: Hostnames must be beneath <namespace>.localhost or <namespace>.local.
+    - expression: "!has(object.metadata.annotations) || object.metadata.annotations.all(k, !k.startsWith('traefik.') && k != 'kubernetes.io/ingress.class')"
+      message: Traefik annotations are not supported by the appliance route contract.
+    - expression: "!has(object.spec.tls) || size(object.spec.tls) == 0"
+      message: Browser TLS is managed by host Caddy, not the Ingress.
+    - expression: "object.spec.rules.all(r, has(r.http) && r.http.paths.all(p, has(p.backend.service) && p.pathType in ['Prefix', 'Exact']))"
+      message: Only Service backends with Prefix or Exact paths are supported.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: containers-gateway-routes
+spec:
+  policyName: containers-gateway-routes
+  validationActions: [Deny]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: traefik
+  namespace: containers-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app: containers-gateway
+  ports:
+    - name: web
+      port: 80
+      targetPort: web
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traefik
+  namespace: containers-gateway
+spec:
+  replicas: 1
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: containers-gateway
+  template:
+    metadata:
+      labels:
+        app: containers-gateway
+    spec:
+      serviceAccountName: traefik
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: traefik
+          image: containers-anywhere/traefik:@TRAEFIK_VERSION@
+          imagePullPolicy: Never
+          args:
+            - --entrypoints.web.address=:8000
+            - --entrypoints.web.asdefault=true
+            # Only guest-node traffic from the authenticated relay is trusted.
+            # The source address is explicitly bound in gateway_guest_linux.go.
+            # kube-proxy may SNAT the node-origin Service connection to cni0.
+            # The single-node appliance uses K3s's default first PodCIDR.
+            - --entrypoints.web.forwardedheaders.trustedips=169.254.254.1/32,10.42.0.1/32
+            - --entrypoints.health.address=:9000
+            - --ping=true
+            - --ping.entrypoint=health
+            - --providers.kubernetesingress=true
+            - --providers.kubernetesingress.ingressclass=containers-anywhere
+            - --providers.kubernetesingress.allowexternalnameservices=false
+            - --providers.kubernetesingress.allowemptyservices=true
+            - --providers.kubernetesingress.strictprefixmatching=true
+            - --core.strictTLSOptions=true
+            - --api.dashboard=false
+            - --global.checknewversion=false
+            - --global.sendanonymoususage=false
+          ports:
+            - name: web
+              containerPort: 8000
+            - name: health
+              containerPort: 9000
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: health
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: health
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]

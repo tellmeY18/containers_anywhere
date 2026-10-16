@@ -15,6 +15,11 @@ Docker-specific backup helpers cannot be reused directly for a VM disk format.
 Existing Clinic backups are not interchangeable with this preview's appliance
 backup format.
 
+`gateway_mdns.go` adapts CARE Clinic's host-interface filtering, per-interface
+multicast sockets and conflict-before-advertise design from
+`app/internal/sys/mdns` at f2836fd87c0d0eab1440126dbe5be34e751bd3c2.
+It uses the existing golang.org/x/net DNS codec instead of Clinic's DNS libraries.
+
 ## CARE Clinic MIT License
 
 Copyright (c) 2026 Open Healthcare Network Foundation
@@ -52,6 +57,22 @@ Source and license: https://github.com/kite-org/kite/tree/v0.16.0.
 generated secrets and the preloaded image.
 
 # Downloaded QEMU runtime
+
+## Caddy and Traefik gateway
+
+Host packages include the upstream Caddy 2.11.7 binary (Apache-2.0), downloaded
+from https://github.com/caddyserver/caddy/releases/tag/v2.11.7 with archive pins
+in scripts/caddy.py. The launcher's build embeds its final binary SHA-256.
+Caddy source and license: https://github.com/caddyserver/caddy/tree/v2.11.7.
+
+Traefik (MIT) is built from the nixpkgs revision pinned in flake.lock and
+preloaded as containers-anywhere/traefik. Its version is taken from that pinned
+package, not a mutable latest tag. Source: https://github.com/traefik/traefik.
+
+The Windows gateway-directory ACL follows the same CARE Clinic-derived private
+file ACL pattern already attributed above, with directory inheritance enabled.
+
+## QEMU
 
 Linux packages redistribute Ubuntu's QEMU and shared-library packages with their
 runtime license files. Corresponding source packages are available from
