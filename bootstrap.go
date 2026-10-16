@@ -2,9 +2,11 @@ package main
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -23,6 +25,18 @@ import (
 // The launcher is the trust anchor; a server-provided checksum is insufficient.
 var applianceURL, applianceSHA256, runtimeURL, runtimeSHA256 string
 
+// Overridable so tests can trust their own certificate authority.
+var newDownloadClient = downloadClient
+
+func downloadClient() *http.Client {
+	return &http.Client{Timeout: 60 * time.Minute, CheckRedirect: func(r *http.Request, via []*http.Request) error {
+		if len(via) >= 10 || r.URL.Scheme != "https" {
+			return errors.New("unsafe download redirect")
+		}
+		return nil
+	}}
+}
+
 func bootstrap(state string, progress func(string)) (string, error) {
 	root := filepath.Join(state, "appliances")
 	if err := os.MkdirAll(root, 0700); err != nil {
@@ -31,19 +45,122 @@ func bootstrap(state string, progress func(string)) (string, error) {
 	if err := validDownload(applianceURL, applianceSHA256); err != nil {
 		return "", fmt.Errorf("launcher has no valid pinned appliance: %w; use a packaged release or --bundle", err)
 	}
+	client := newDownloadClient()
+	// A gzip archive is not reproducible, so each release yields a different
+	// archive hash even when the appliance is byte-identical. Reuse is therefore
+	// keyed on content identity: the manifest carries a SHA-256 for every member,
+	// so a cached bundle with an identical manifest provably is the same appliance
+	// and needs no download at all.
+	if want, err := remoteManifest(client, applianceURL); err == nil && validateLayers(want) == nil && want.Arch == runtime.GOARCH {
+		if dir, ok := cachedBundle(root, want); ok {
+			progress("Reusing the appliance already verified on this computer.")
+			if runtime.GOOS != "darwin" {
+				if err := ensureRuntime(client, state, progress); err != nil {
+					return "", err
+				}
+			}
+			return dir, nil
+		}
+	}
 	dest := filepath.Join(root, applianceSHA256)
 	if err := os.MkdirAll(dest, 0700); err != nil {
 		return "", err
 	}
-	if err := installArchive(applianceURL, applianceSHA256, filepath.Join(dest, "bundle"), progress); err != nil {
+	if err := installArchive(client, applianceURL, applianceSHA256, filepath.Join(dest, "bundle"), progress); err != nil {
 		return "", err
 	}
 	if runtime.GOOS != "darwin" {
-		if err := installArchive(runtimeURL, runtimeSHA256, filepath.Join(dest, "qemu"), progress); err != nil {
+		if err := ensureRuntime(client, state, progress); err != nil {
 			return "", err
 		}
 	}
 	return filepath.Join(dest, "bundle"), nil
+}
+
+func ensureRuntime(client *http.Client, state string, progress func(string)) error {
+	if err := validDownload(runtimeURL, runtimeSHA256); err != nil {
+		return fmt.Errorf("launcher has no valid pinned QEMU runtime: %w; use a packaged release", err)
+	}
+	root := filepath.Join(state, "appliances")
+	dest := filepath.Join(root, runtimeSHA256)
+	if err := os.MkdirAll(dest, 0700); err != nil {
+		return err
+	}
+	return installArchive(client, runtimeURL, runtimeSHA256, filepath.Join(dest, "qemu"), progress)
+}
+
+// cachedBundle finds an already-unpacked, fully verified appliance with the
+// wanted content identity. Partial or tampered directories never qualify.
+func cachedBundle(root string, want manifest) (string, bool) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return "", false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, entry.Name(), "bundle")
+		m, err := readManifest(filepath.Join(dir, "manifest.json"))
+		if err != nil || bundleID(m) != bundleID(want) {
+			continue
+		}
+		if _, err := verifyBundle(dir); err != nil {
+			continue
+		}
+		return dir, true
+	}
+	return "", false
+}
+
+const prefixWindow = 64 << 10
+
+// remoteManifest reads only the leading bytes of the pinned archive to recover
+// its manifest member. Any unexpected result falls back to a full download, so a
+// server without ranged reads costs nothing but bandwidth.
+func remoteManifest(client *http.Client, address string) (manifest, error) {
+	var m manifest
+	req, err := http.NewRequest("GET", address, nil)
+	if err != nil {
+		return m, err
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", prefixWindow-1))
+	req.Header.Set("Accept-Encoding", "identity")
+	resp, err := client.Do(req)
+	if err != nil {
+		return m, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent {
+		return m, errors.New("server does not support ranged reads")
+	}
+	window, err := io.ReadAll(io.LimitReader(resp.Body, prefixWindow+1))
+	if err != nil {
+		return m, err
+	}
+	if len(window) > prefixWindow {
+		window = window[:prefixWindow]
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(window))
+	if err != nil {
+		return m, err
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if err != nil {
+			return m, err
+		}
+		if header.Name != "manifest.json" {
+			continue
+		}
+		raw, err := io.ReadAll(io.LimitReader(tr, 1<<20))
+		if err != nil {
+			return m, err
+		}
+		return m, json.Unmarshal(raw, &m)
+	}
 }
 
 func validDownload(address, digest string) error {
@@ -58,7 +175,7 @@ func validDownload(address, digest string) error {
 	return nil
 }
 
-func installArchive(address, digest, dest string, progress func(string)) error {
+func installArchive(client *http.Client, address, digest, dest string, progress func(string)) error {
 	if err := validDownload(address, digest); err != nil {
 		return err
 	}
@@ -70,12 +187,7 @@ func installArchive(address, digest, dest string, progress func(string)) error {
 		return errors.New("incomplete or untrusted runtime directory; move it aside before retrying: " + dest)
 	}
 	archive := dest + ".tar.gz"
-	if err := downloadArchive(&http.Client{Timeout: 60 * time.Minute, CheckRedirect: func(r *http.Request, via []*http.Request) error {
-		if len(via) >= 10 || r.URL.Scheme != "https" {
-			return errors.New("unsafe download redirect")
-		}
-		return nil
-	}}, address, digest, archive, progress); err != nil {
+	if err := downloadArchive(client, address, digest, archive, progress); err != nil {
 		return err
 	}
 	progress("Unpacking and verifying " + filepath.Base(dest) + "…")
