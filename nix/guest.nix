@@ -11,7 +11,7 @@ let
         ../go.sum
       ];
     };
-    vendorHash = "sha256-eU5/KvEy1gyFXFCQDJ39u3hhog7nQNpHgMvjlC7HkGM=";
+    vendorHash = "sha256-dZunFx7sqR/OV63bf5MSse7Qmtu994+qOwu1+yInaCI=";
     env.CGO_ENABLED = "0";
     ldflags = [ "-s" "-w" ];
     doCheck = false;
