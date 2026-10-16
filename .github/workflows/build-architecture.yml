@@ -1,0 +1,143 @@
+name: Build and accept one architecture
+on:
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      system:
+        required: true
+        type: string
+      runner:
+        required: true
+        type: string
+      packages:
+        description: JSON include matrix of the desktop packages built for this architecture.
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  appliance:
+    name: appliance-${{ inputs.arch }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: ca-nix-v2-${{ inputs.system }}-${{ hashFiles('flake.nix', 'flake.lock', 'nix/**', '**/*.go', 'go.mod', 'go.sum', '.github/workflows/build-architecture.yml') }}
+          restore-prefixes-first-match: |
+            ca-nix-v2-${{ inputs.system }}-
+            ca-nix-${{ inputs.system }}-
+          gc-max-store-size-linux: 6000000000
+      - name: Build preloaded K3s and Kite appliance
+        id: build
+        env:
+          SYSTEM: ${{ inputs.system }}
+        run: |
+          # Keep the current bundle rooted during cache-nix's post-job GC.
+          bundle=$(nix build ".#packages.$SYSTEM.bundle" --no-update-lock-file --out-link result --print-out-paths)
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+      - name: Archive verified appliance
+        env:
+          BUNDLE: ${{ steps.build.outputs.bundle }}
+          ARCH: ${{ inputs.arch }}
+        run: |
+          mkdir -p dist
+          python3 scripts/appliance.py "$BUNDLE" "dist/appliance-$ARCH.tar.gz"
+      - name: Record guest closure and image sizes
+        env:
+          BUNDLE: ${{ steps.build.outputs.bundle }}
+          ARCH: ${{ inputs.arch }}
+        run: |
+          system=$(jq -r .system "$BUNDLE/manifest.json")
+          nix path-info --recursive --json "$system" > "dist/closure-$ARCH.json"
+          python3 scripts/appliance_report.py "$BUNDLE" "dist/appliance-$ARCH.tar.gz" "dist/closure-$ARCH.json" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: closure-${{ inputs.arch }}
+          path: dist/closure-*.json
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: appliance-${{ inputs.arch }}
+          path: dist/appliance-*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+  package:
+    needs: appliance
+    name: package-${{ matrix.platform }}-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.packages) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      PYTHONUTF8: '1'
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - run: go test -race ./...
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: appliance-${{ matrix.arch }}
+          path: dist
+      - if: matrix.platform == 'linux'
+        env:
+          QEMU_PACKAGE: ${{ matrix.arch == 'amd64' && 'qemu-system-x86' || 'qemu-system-arm' }}
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends "$QEMU_PACKAGE" squashfs-tools libfuse2t64
+      - name: Package launcher and separate runtime
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+        run: python scripts/package.py "$PLATFORM" --arch "$ARCH" --version "$VERSION" --appliance "dist/appliance-$ARCH.tar.gz" --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/containers-v$VERSION"
+      - name: Linux KVM boot, Kite workload, restart and encrypted restore
+        if: matrix.platform == 'linux' && matrix.arch == 'amd64'
+        shell: bash
+        run: |
+          test -c /dev/kvm
+          sudo chmod a+rw /dev/kvm
+          mkdir -p dist/acceptance/bundle dist/acceptance/qemu
+          tar -xzf dist/appliance-amd64.tar.gz -C dist/acceptance/bundle
+          tar -xzf dist/releases/runtime-linux-amd64.tar.gz -C dist/acceptance/qemu
+          python scripts/smoke.py --binary dist/releases/stage-linux-amd64/containers-anywhere/containers-anywhere --bundle dist/acceptance/bundle --state dist/smoke --restore
+      - name: Windows emulated VM boot and Kite acceptance
+        if: matrix.platform == 'windows'
+        shell: bash
+        env:
+          CONTAINERS_QEMU_ACCEL: tcg
+          CONTAINERS_GUEST_DEBUG: '1'
+          CONTAINERS_SMOKE_BOOT_SECONDS: '1200'
+        run: |
+          mkdir -p dist/acceptance/bundle dist/acceptance/qemu
+          tar -xzf dist/appliance-amd64.tar.gz -C dist/acceptance/bundle
+          tar -xzf dist/releases/runtime-windows-amd64.tar.gz -C dist/acceptance/qemu
+          python scripts/smoke.py --binary dist/releases/stage-windows-amd64/containers-anywhere/containers-anywhere.exe --bundle dist/acceptance/bundle --state dist/smoke
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: diagnostics-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/smoke*/*.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: package-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            dist/releases/Containers-Anywhere-*
+            dist/releases/runtime-*.tar.gz*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

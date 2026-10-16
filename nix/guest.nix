@@ -26,6 +26,26 @@ in
   system.switch.enable = false;
   documentation.enable = false;
   environment.defaultPackages = [ ];
+  # Keep basic shell/storage diagnostics; omit the interactive distro toolbox.
+  # Services retain their own explicitly declared executable dependencies.
+  environment.corePackages = lib.mkForce (with pkgs; [
+    bash
+    coreutils
+    findutils
+    gawk
+    gnugrep
+    gnused
+    procps
+    util-linux
+  ]);
+  # No interactive administration or physical-disk management in this appliance.
+  programs.nano.enable = false;
+  programs.less.enable = lib.mkForce false;
+  environment.variables.PAGER = "cat";
+  fonts.fontconfig.enable = false;
+  services.lvm.enable = false;
+  boot.bcache.enable = false;
+  boot.kexec.enable = false;
   security.sudo.enable = false;
   microvm = {
     hypervisor = "qemu";
@@ -33,7 +53,9 @@ in
     vcpu = 2;
     storeOnDisk = true;
     storeDiskType = "erofs";
-    storeDiskErofsFlags = [ "-zlz4hc" "-Eztailpacking" "-Efragments" "-Ededupe" ];
+    # -Ededupe forces single-threaded compression in the pinned microvm builder.
+    # Retain LZ4HC density and tail packing while allowing parallel construction.
+    storeDiskErofsFlags = [ "-zlz4hc" "-Eztailpacking" "-Efragments" ];
     volumes = [{ image = "data.img"; mountPoint = "/var/lib"; size = 16384; }];
   };
   fileSystems."/var/lib" = {
@@ -72,10 +94,12 @@ in
     before = [ "k3s.service" ];
     requiredBy = [ "k3s.service" ];
     after = [ "systemd-tmpfiles-setup.service" ];
-    serviceConfig = { Type = "oneshot"; RemainAfterExit = true; UMask = "0077"; };
-    script = ''
-      ${pkgs.python3}/bin/python3 ${./kite-secrets.py}
-    '';
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      UMask = "0077";
+      ExecStart = "${agent}/bin/containers_anywhere guest init-kite";
+    };
   };
   # A reconnecting local tunnel avoids NodePort/hostNetwork exposure and survives
   # Kite pod replacement. Both HTTP and WebSocket upgrades use the guest agent.

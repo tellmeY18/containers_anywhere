@@ -70,6 +70,8 @@ phase; retain the original disk whenever compatibility or recovery is uncertain.
 Follow [APPLIANCE.md](docs/APPLIANCE.md): closure inventory, remove Python-only
 secret generation, prune unused preloads, measure duplicate storage, then optimize
 kernel/userspace. A smaller image must pass the same recovery gates.
+The first userspace/Go secret-generation pass is in source, pending CI build and
+boot acceptance; it is not yet a measured release-size reduction.
 
 ## Release evidence
 

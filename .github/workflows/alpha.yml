@@ -8,7 +8,7 @@ permissions:
   contents: read
 concurrency:
   group: containers-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   checks:
     runs-on: ubuntu-24.04
@@ -19,116 +19,28 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: go.mod
-      - run: test -z "$(gofmt -l *.go)" && go vet ./... && go test -race ./...
+      - run: test -z "$(gofmt -l ./*.go)" && go vet ./... && go test -race ./...
       - run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/containers-anywhere.exe .
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - id: version
         run: echo "version=$(cat VERSION)-mvp.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
-  appliance:
+  amd64:
     if: github.event_name != 'pull_request'
     needs: checks
-    name: appliance-${{ matrix.arch }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {runner: ubuntu-24.04, system: x86_64-linux, arch: amd64}
-          - {runner: ubuntu-24.04-arm, system: aarch64-linux, arch: arm64}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 180
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
-      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
-        with:
-          primary-key: ca-nix-${{ matrix.system }}-${{ hashFiles('flake.lock', 'nix/**', '*.go', 'go.*') }}
-          restore-prefixes-first-match: ca-nix-${{ matrix.system }}-
-          gc-max-store-size-linux: 6000000000
-      - name: Build preloaded K3s and Kite appliance
-        env:
-          SYSTEM: ${{ matrix.system }}
-          ARCH: ${{ matrix.arch }}
-        run: |
-          bundle=$(nix build ".#packages.$SYSTEM.bundle" --no-update-lock-file --no-link --print-out-paths)
-          mkdir -p dist
-          python3 scripts/appliance.py "$bundle" "dist/appliance-$ARCH.tar.gz"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: appliance-${{ matrix.arch }}
-          path: dist/appliance-*
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
-  package:
-    needs: [checks, appliance]
-    name: package-${{ matrix.platform }}-${{ matrix.arch }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {runner: ubuntu-24.04, platform: linux, arch: amd64}
-          - {runner: ubuntu-24.04-arm, platform: linux, arch: arm64}
-          - {runner: macos-latest, platform: macos, arch: arm64}
-          - {runner: windows-2025, platform: windows, arch: amd64}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
-    env:
-      PYTHONUTF8: '1'
-      VERSION: ${{ needs.checks.outputs.version }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        with:
-          go-version-file: go.mod
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: '3.13'
-      - run: go test -race ./...
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: appliance-${{ matrix.arch }}
-          path: dist
-      - if: matrix.platform == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 qemu-system-arm squashfs-tools libfuse2t64
-      - name: Package launcher and separate runtime
-        shell: bash
-        env:
-          PLATFORM: ${{ matrix.platform }}
-          ARCH: ${{ matrix.arch }}
-        run: python scripts/package.py "$PLATFORM" --arch "$ARCH" --version "$VERSION" --appliance "dist/appliance-$ARCH.tar.gz" --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/containers-v$VERSION"
-      - name: Linux KVM boot, Kite workload, restart and encrypted restore
-        if: matrix.platform == 'linux' && matrix.arch == 'amd64'
-        shell: bash
-        run: |
-          test -c /dev/kvm
-          sudo chmod a+rw /dev/kvm
-          mkdir -p dist/acceptance/bundle dist/acceptance/qemu
-          tar -xzf dist/appliance-amd64.tar.gz -C dist/acceptance/bundle
-          tar -xzf dist/releases/runtime-linux-amd64.tar.gz -C dist/acceptance/qemu
-          python scripts/smoke.py --binary dist/releases/stage-linux-amd64/containers-anywhere/containers-anywhere --bundle dist/acceptance/bundle --state dist/smoke --restore
-      - name: Windows emulated VM boot and Kite acceptance
-        if: matrix.platform == 'windows'
-        shell: bash
-        env:
-          CONTAINERS_QEMU_ACCEL: tcg
-          CONTAINERS_GUEST_DEBUG: '1'
-          CONTAINERS_SMOKE_BOOT_SECONDS: '1200'
-        run: |
-          mkdir -p dist/acceptance/bundle dist/acceptance/qemu
-          tar -xzf dist/appliance-amd64.tar.gz -C dist/acceptance/bundle
-          tar -xzf dist/releases/runtime-windows-amd64.tar.gz -C dist/acceptance/qemu
-          python scripts/smoke.py --binary dist/releases/stage-windows-amd64/containers-anywhere/containers-anywhere.exe --bundle dist/acceptance/bundle --state dist/smoke
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        if: always()
-        with:
-          name: diagnostics-${{ matrix.platform }}-${{ matrix.arch }}
-          path: dist/smoke*/*.log
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: package-${{ matrix.platform }}-${{ matrix.arch }}
-          path: |
-            dist/releases/Containers-Anywhere-*
-            dist/releases/runtime-*.tar.gz*
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
+    uses: ./.github/workflows/build-architecture.yml
+    with:
+      arch: amd64
+      system: x86_64-linux
+      runner: ubuntu-24.04
+      packages: '{"include":[{"runner":"ubuntu-24.04","platform":"linux","arch":"amd64"},{"runner":"windows-2025","platform":"windows","arch":"amd64"}]}'
+      version: ${{ needs.checks.outputs.version }}
+  arm64:
+    if: github.event_name != 'pull_request'
+    needs: checks
+    uses: ./.github/workflows/build-architecture.yml
+    with:
+      arch: arm64
+      system: aarch64-linux
+      runner: ubuntu-24.04-arm
+      packages: '{"include":[{"runner":"ubuntu-24.04-arm","platform":"linux","arch":"arm64"},{"runner":"macos-latest","platform":"macos","arch":"arm64"}]}'
+      version: ${{ needs.checks.outputs.version }}

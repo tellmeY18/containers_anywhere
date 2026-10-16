@@ -18,11 +18,33 @@ memory, CPU and background writes. Publish hardware and measurement procedure.
 
 ## Order of work
 
+### First slimming pass (pending build and boot acceptance)
+
+The guest now uses the existing Go agent for first-boot Kite secrets instead of
+shipping Python for that task. It reads the same persisted JSON keys, rejects
+corrupt keys without regeneration, and atomically publishes private files using
+the existing fsync/rename helper. Python remains a build-time dependency.
+
+The configuration disables LVM, bcache, kexec, nano, pager integration and
+fontconfig. The generic interactive core package list is replaced with Bash,
+coreutils, findutils, gawk, grep, sed, procps and util-linux. Service-declared
+dependencies, ext4 checking/resizing, networking, timekeeping, TLS trust,
+systemd/journal diagnostics and all current preloaded images remain required.
+Removing a package from the shell environment does not prove it disappeared from
+the transitive runtime closure.
+
+EROFS retains LZ4HC and tail packing but drops block deduplication, which forced
+single-threaded construction in the pinned microvm builder. This is a build-speed
+tradeoff: measure the resulting image size before accepting it. Each architecture
+now uploads its guest closure inventory and reports file sizes and the 30 largest
+store paths in the Actions summary. See [the CI reconnaissance](CI_PERFORMANCE.md).
+
+### Next reductions
+
 1. Inventory closure sizes and image layers by architecture. Identify retained
    build tools, redundant packages, firmware, locales and modules.
-2. Remove Python from the guest's secret-generation path by reusing the Go agent;
-   retain first-boot atomic writes and persistent key identity. Python remains a
-   build-time tool if useful.
+2. Verify the Go secret-generation change removes Python from the runtime closure;
+   run fresh boot/restart/restore acceptance and compare both architecture sizes.
 3. Audit K3s airgap image contents. Disabled Traefik/ServiceLB/metrics-server may
    still occupy archive space. Prune only after proving CoreDNS, local-path helper
    pods and recovery paths work without registry access.
