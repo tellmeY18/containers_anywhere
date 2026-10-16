@@ -281,21 +281,25 @@ func serve(state, bundle string, port int, noOpen bool) error {
 	}()
 	timeout := time.NewTimer(bootTimeout() + 30*time.Second)
 	defer timeout.Stop()
-	select {
-	case <-signals:
-	case <-done:
-	case healthy := <-ready:
-		if !healthy {
+	for {
+		select {
+		case <-signals:
+			return vm.Close()
+		case <-done:
+			return vm.Close()
+		case healthy := <-ready:
+			if !healthy {
+				return fmt.Errorf("%s", bootDiagnosis(state))
+			}
+			ready = nil // Already healthy; stop watching readiness.
+		case <-timeout.C:
 			return fmt.Errorf("%s", bootDiagnosis(state))
+		case err := <-errs:
+			return err
+		case <-vm.Done():
+			return errors.New("VM exited; see console.log")
 		}
-	case <-timeout.C:
-		return fmt.Errorf("%s", bootDiagnosis(state))
-	case err := <-errs:
-		return err
-	case <-vm.Done():
-		return errors.New("VM exited; see console.log")
 	}
-	return vm.Close()
 }
 
 // bootTimeout allows slow emulated boots; hardware boots finish far sooner.

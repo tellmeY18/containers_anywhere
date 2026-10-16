@@ -10,7 +10,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
+	"time"
 )
 
 func TestArchiveRejectsUnsafeMembers(t *testing.T) {
@@ -36,6 +38,13 @@ func TestArchiveRejectsUnsafeMembers(t *testing.T) {
 			}
 		})
 	}
+}
+
+func testBundleManifest(t *testing.T) manifest {
+	t.Helper()
+	dir, m := testBundle(t)
+	_ = dir
+	return m
 }
 
 func TestDownloadResumesAndVerifiesBeforePublish(t *testing.T) {
@@ -109,5 +118,120 @@ func TestKiteProxySeparatesHostCapability(t *testing.T) {
 		if w.Code != tc.status {
 			t.Fatalf("%s: got %d want %d", tc.path, w.Code, tc.status)
 		}
+	}
+}
+
+func bundleArchive(t *testing.T, m manifest) []byte {
+	t.Helper()
+	dir := t.TempDir()
+	for name := range m.Files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := saveJSON(filepath.Join(dir, "manifest.json"), m); err != nil {
+		t.Fatal(err)
+	}
+	var b bytes.Buffer
+	gz := gzip.NewWriter(&b)
+	tw := tar.NewWriter(gz)
+	for _, name := range []string{"manifest.json", "kernel", "initrd", "system.img", "data.img"} {
+		raw, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0600, Size: int64(len(raw))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tw.Write(raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tw.Close()
+	gz.Close()
+	return b.Bytes()
+}
+
+func rangedHandler(body []byte, ranged bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !ranged {
+			w.Write(body)
+			return
+		}
+		http.ServeContent(w, r, "a.tar.gz", time.Unix(0, 0), bytes.NewReader(body))
+	})
+}
+
+// An unchanged appliance must be reused from cache instead of re-downloaded,
+// even when the release republishes a byte-different archive of the same content.
+func TestBootstrapReusesUnchangedAppliance(t *testing.T) {
+	body := bundleArchive(t, testBundleManifest(t))
+	server := httptest.NewTLSServer(rangedHandler(body, true))
+	defer server.Close()
+	newDownloadClient = server.Client
+	defer func() { newDownloadClient = downloadClient }()
+	state := t.TempDir()
+	root := filepath.Join(state, "appliances")
+	cached := filepath.Join(root, "oldarchivesha", "bundle")
+	if err := extractArchive(bytes.NewReader(body), cached); err != nil {
+		t.Fatal(err)
+	}
+	applianceURL, applianceSHA256, runtimeURL, runtimeSHA256 = server.URL, sha256Text(body), "", ""
+	defer func() { applianceURL, applianceSHA256, runtimeURL, runtimeSHA256 = "", "", "", "" }()
+	if runtime.GOOS != "darwin" {
+		t.Skip("reuse path also installs the QEMU runtime off macOS")
+	}
+	dir, err := bootstrap(state, func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir != cached {
+		t.Fatalf("re-downloaded instead of reusing: %s", dir)
+	}
+}
+
+func TestRemoteManifestReadsLeadingMember(t *testing.T) {
+	m := testBundleManifest(t)
+	body := bundleArchive(t, m)
+	server := httptest.NewTLSServer(rangedHandler(body, true))
+	defer server.Close()
+	got, err := remoteManifest(server.Client(), server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bundleID(got) != bundleID(m) {
+		t.Fatal("manifest identity mismatch")
+	}
+	// A server that ignores Range must fail closed rather than buffer the archive.
+	plain := httptest.NewTLSServer(rangedHandler(body, false))
+	defer plain.Close()
+	if _, err := remoteManifest(plain.Client(), plain.URL); err == nil {
+		t.Fatal("accepted an unranged response")
+	}
+}
+
+func TestCachedBundleIgnoresTamperedContent(t *testing.T) {
+	m := testBundleManifest(t)
+	root := t.TempDir()
+	dir := filepath.Join(root, "sha", "bundle")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveJSON(filepath.Join(dir, "manifest.json"), m); err != nil {
+		t.Fatal(err)
+	}
+	for name := range m.Files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok := cachedBundle(root, m); !ok {
+		t.Fatal("rejected a valid cached bundle")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "system.img"), []byte("tampered"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cachedBundle(root, m); ok {
+		t.Fatal("reused a tampered bundle")
 	}
 }
