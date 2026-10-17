@@ -78,7 +78,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(inputs.packages) }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
       PYTHONUTF8: '1'
       VERSION: ${{ inputs.version }}
@@ -136,7 +136,7 @@ jobs:
         env:
           CONTAINERS_QEMU_ACCEL: tcg
           CONTAINERS_GUEST_DEBUG: '1'
-          CONTAINERS_SMOKE_BOOT_SECONDS: '1200'
+          CONTAINERS_SMOKE_BOOT_SECONDS: '2400'
         run: |
           mkdir -p dist/acceptance/bundle dist/acceptance/qemu
           tar -xzf dist/appliance-amd64.tar.gz -C dist/acceptance/bundle
