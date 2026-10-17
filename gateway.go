@@ -249,6 +249,9 @@ func startGateway(state string, vm machine) (*gateway, error) {
 			return nil, nil
 		} // Unpackaged development launcher.
 		cfg := gatewayConfig{Port: 443, HTTPPort: 80, MDNS: true, Addresses: []string{"127.0.0.1"}, Namespaces: []string{"containers-demo"}, Domains: []string{"demo.local", "demo.localhost"}}
+		if !canBindPrivilegedPorts() {
+			cfg.Port, cfg.HTTPPort = 8443, 8080
+		}
 		links, linkErr := demoLinks(nil)
 		if linkErr != nil {
 			return nil, linkErr
@@ -609,4 +612,20 @@ func caddyConfig(c gatewayConfig, storage, upstream, token string) map[string]an
 		servers["bootstrap"] = map[string]any{"listen": c.listeners(c.HTTPPort), "protocols": []string{"h1"}, "automatic_https": map[string]any{"disable": true}, "routes": servers["workloads"].(map[string]any)["routes"]}
 	}
 	return config
+}
+
+// macOS lets unprivileged processes bind ports below 1024 only on the wildcard
+// address, while the gateway binds explicit addresses. Fall back to high ports
+// instead of failing the whole appliance start.
+func canBindPrivilegedPorts() bool {
+	for _, port := range []int{443, 80} {
+		l, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", fmt.Sprint(port)))
+		if errors.Is(err, os.ErrPermission) {
+			return false
+		}
+		if l != nil {
+			l.Close()
+		}
+	}
+	return true
 }
