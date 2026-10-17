@@ -121,9 +121,20 @@ def main():
                     return result.returncode == 0 and result.stdout == marker
 
                 wait_for(gateway_ready, process, timeout)
-                demo = subprocess.run(["curl", "--silent", "--show-error", "--fail", "--noproxy", "*", "--max-time", "20",
-                                       "--resolve", "demo.local:18080:127.0.0.1", "http://demo.local:18080/"], capture_output=True)
-                assert demo.returncode == 0 and b"Containers Anywhere works." in demo.stdout, "Preloaded demo did not traverse Caddy/Traefik"
+                demo_command = ["curl", "--silent", "--show-error", "--fail", "--noproxy", "*", "--max-time", "20",
+                                "--resolve", "demo.local:18080:127.0.0.1", "http://demo.local:18080/"]
+                last = []
+
+                def demo_ready():
+                    # After a restore every pod restarts, so the demo may lag the workload.
+                    last[:] = [subprocess.run(demo_command, capture_output=True)]
+                    return last[0].returncode == 0 and b"Containers Anywhere works." in last[0].stdout
+
+                try:
+                    wait_for(demo_ready, process, 300)
+                except TimeoutError:
+                    demo = last[0]
+                    raise AssertionError(f"Preloaded demo did not traverse Caddy/Traefik: rc={demo.returncode} stdout={demo.stdout[:200]!r} stderr={demo.stderr[:200]!r}")
                 nonlocal gateway_root
                 if gateway_root is None:
                     gateway_root = root.read_bytes()
