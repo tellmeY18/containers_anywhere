@@ -15,9 +15,13 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
+
+// cncmOpened makes the CNCM setup page open once per desktop session.
+var cncmOpened atomic.Bool
 
 func openURL(url string) error {
 	if os.Getenv("CONTAINERS_NO_BROWSER") == "1" {
@@ -247,11 +251,26 @@ func desktop(state, bundle string) error {
 							s["phase"], s["detail"] = "ready", "K3s and Kite are ready. Open CNCM to set up CARE, or Kite for advanced cluster management."
 							s["kiteURL"] = cc.AppURL + "/_open?token=" + cc.AppToken
 							gw, _ := s["gateway"].(map[string]any)
+							base := ""
 							if demo, _ := gw["demoURL"].(string); demo != "" {
+								base = strings.Replace(demo, "demo.local", "cncm.cncm-system.local", 1)
+							} else if urls, _ := gw["urls"].([]any); len(urls) > 0 {
+								// mDNS is unavailable; this machine resolves *.localhost itself.
+								for _, u := range urls {
+									if v, _ := u.(string); strings.Contains(v, "cncm.cncm-system.localhost") {
+										base = v
+									}
+								}
+							}
+							if base != "" {
 								if tb, e := controlCall(cc, "GET", "/control/cncm", nil, 3*time.Second); e == nil {
 									var t struct{ Token string }
 									if json.Unmarshal(tb, &t) == nil && t.Token != "" {
-										s["cncmURL"] = strings.Replace(demo, "demo.local", "cncm.cncm-system.local", 1) + "/#token=" + t.Token
+										link := base + "/#token=" + t.Token
+										s["cncmURL"] = link
+										if cncmOpened.CompareAndSwap(false, true) {
+											go openURL(link)
+										}
 									}
 								}
 							}

@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -350,7 +351,11 @@ func (g *gateway) refreshDiscovery(ctx context.Context) {
 			err = errors.New("demo workload not ready")
 		}
 	}
-	links, linkErr := demoLinks(g.config.Addresses)
+	allowed := g.config.Addresses
+	if slices.Contains(allowed, wildcardAddress) {
+		allowed = nil
+	}
+	links, linkErr := demoLinks(allowed)
 	if err == nil {
 		err = linkErr
 	}
