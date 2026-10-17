@@ -58,7 +58,13 @@ func (c gatewayConfig) validate() error {
 	if len(c.Addresses) > 16 {
 		return errors.New("too many gateway addresses")
 	}
+	if slices.Contains(c.Addresses, wildcardAddress) && len(c.Addresses) != 1 {
+		return errors.New("wildcard gateway address cannot be combined with other addresses")
+	}
 	for _, address := range c.Addresses {
+		if address == wildcardAddress {
+			continue
+		}
 		ip := net.ParseIP(address)
 		if ip == nil || ip.To4() == nil || ip.IsUnspecified() || ip.IsMulticast() || (!ip.IsLoopback() && !ip.IsPrivate()) {
 			return fmt.Errorf("gateway address %q must be explicit loopback or private LAN IPv4", address)
@@ -67,7 +73,7 @@ func (c gatewayConfig) validate() error {
 	if c.MDNS && c.HTTPPort == 0 {
 		return errors.New("mDNS demo requires an HTTP listener")
 	}
-	if c.MDNS && !slices.Contains(c.Addresses, "127.0.0.1") {
+	if c.MDNS && !slices.Contains(c.Addresses, "127.0.0.1") && !slices.Contains(c.Addresses, wildcardAddress) {
 		return errors.New("mDNS health verification requires 127.0.0.1 among gateway addresses")
 	}
 	for _, ns := range c.Namespaces {
@@ -249,15 +255,26 @@ func startGateway(state string, vm machine) (*gateway, error) {
 			return nil, nil
 		} // Unpackaged development launcher.
 		cfg := gatewayConfig{Port: 443, HTTPPort: 80, MDNS: true, Addresses: []string{"127.0.0.1"}, Namespaces: []string{"containers-demo"}, Domains: []string{"demo.local", "demo.localhost"}}
-		if !canBindPrivilegedPorts() {
+		switch {
+		case canBind("127.0.0.1"):
+			links, linkErr := demoLinks(nil)
+			if linkErr != nil {
+				return nil, linkErr
+			}
+			for _, link := range links {
+				cfg.Addresses = append(cfg.Addresses, link.ip.String())
+			}
+		case canBind(wildcardAddress):
+			cfg.Addresses = []string{wildcardAddress}
+		default:
 			cfg.Port, cfg.HTTPPort = 8443, 8080
-		}
-		links, linkErr := demoLinks(nil)
-		if linkErr != nil {
-			return nil, linkErr
-		}
-		for _, link := range links {
-			cfg.Addresses = append(cfg.Addresses, link.ip.String())
+			links, linkErr := demoLinks(nil)
+			if linkErr != nil {
+				return nil, linkErr
+			}
+			for _, link := range links {
+				cfg.Addresses = append(cfg.Addresses, link.ip.String())
+			}
 		}
 		if err = saveJSON(filepath.Join(state, "gateway.json"), cfg); err != nil {
 			return nil, err
@@ -614,12 +631,14 @@ func caddyConfig(c gatewayConfig, storage, upstream, token string) map[string]an
 	return config
 }
 
+const wildcardAddress = "0.0.0.0"
+
 // macOS lets unprivileged processes bind ports below 1024 only on the wildcard
-// address, while the gateway binds explicit addresses. Fall back to high ports
-// instead of failing the whole appliance start.
-func canBindPrivilegedPorts() bool {
+// address. canBind reports whether ports 443 and 80 can be bound on address;
+// without that the gateway falls back to high ports instead of failing startup.
+func canBind(address string) bool {
 	for _, port := range []int{443, 80} {
-		l, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", fmt.Sprint(port)))
+		l, err := net.Listen("tcp4", net.JoinHostPort(address, fmt.Sprint(port)))
 		if errors.Is(err, os.ErrPermission) {
 			return false
 		}

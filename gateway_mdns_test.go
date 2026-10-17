@@ -46,10 +46,18 @@ func TestGatewayLANBindingsAreExplicit(t *testing.T) {
 	if err := c.validate(); err != nil {
 		t.Fatal(err)
 	}
-	for _, address := range []string{"0.0.0.0", "::", "8.8.8.8", "localhost", "192.168.42.0/24"} {
+	for _, address := range []string{"::", "8.8.8.8", "localhost", "192.168.42.0/24"} {
 		c.Addresses = []string{address}
 		if c.validate() == nil {
 			t.Fatalf("accepted %s", address)
 		}
+	}
+	c.Addresses = []string{"0.0.0.0"}
+	if err := c.validate(); err != nil {
+		t.Fatal(err)
+	}
+	c.Addresses = []string{"0.0.0.0", "127.0.0.1"}
+	if c.validate() == nil {
+		t.Fatal("wildcard combined with explicit address")
 	}
 }
