@@ -18,7 +18,7 @@ func TestDemoMDNSRecordsAndConflict(t *testing.T) {
 	if err = parsed.Unpack(wire); err != nil {
 		t.Fatal(err)
 	}
-	if len(parsed.Answers) != 4 {
+	if len(parsed.Answers) != 4+len(extraNames) {
 		t.Fatal(parsed)
 	}
 	if demoConflict(parsed, ip) {

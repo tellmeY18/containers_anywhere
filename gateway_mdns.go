@@ -74,6 +74,13 @@ var demoName = dnsmessage.MustNewName("demo.local.")
 var demoService = dnsmessage.MustNewName("_http._tcp.local.")
 var demoInstance = dnsmessage.MustNewName("Containers Anywhere._http._tcp.local.")
 
+// Names for the preinstalled CNCM manager and the CARE deployment it creates.
+// They resolve to the same address as demo.local and are routed by the gateway.
+var extraNames = []dnsmessage.Name{
+	dnsmessage.MustNewName("cncm.cncm-system.local."),
+	dnsmessage.MustNewName("care.care.local."),
+}
+
 type demoSocket struct {
 	conn *ipv4.PacketConn
 	link demoLink
@@ -98,12 +105,16 @@ func demoRecords(ip net.IP, port uint16, ttl uint32) []dnsmessage.Resource {
 		}
 		return dnsmessage.ResourceHeader{Name: name, Type: t, Class: class, TTL: ttl}
 	}
-	return []dnsmessage.Resource{
+	records := []dnsmessage.Resource{
 		{Header: header(demoName, dnsmessage.TypeA, true), Body: &dnsmessage.AResource{A: addr}},
 		{Header: header(demoService, dnsmessage.TypePTR, false), Body: &dnsmessage.PTRResource{PTR: demoInstance}},
 		{Header: header(demoInstance, dnsmessage.TypeSRV, true), Body: &dnsmessage.SRVResource{Port: port, Target: demoName}},
 		{Header: header(demoInstance, dnsmessage.TypeTXT, true), Body: &dnsmessage.TXTResource{TXT: []string{"path=/", "product=containers-anywhere"}}},
 	}
+	for _, name := range extraNames {
+		records = append(records, dnsmessage.Resource{Header: header(name, dnsmessage.TypeA, true), Body: &dnsmessage.AResource{A: addr}})
+	}
+	return records
 }
 
 func demoConflict(m dnsmessage.Message, own net.IP) bool {

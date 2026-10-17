@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -73,6 +74,15 @@ func guestMain() error {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"healthy": k3s && kite, "k3s": k3s, "kite": kite})
 	})
+	mux.HandleFunc("GET /_agent/cncm", func(w http.ResponseWriter, r *http.Request) {
+		token, err := cncmToken("/var/lib")
+		if err != nil {
+			http.Error(w, "CNCM bootstrap token unavailable", 503)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"token": token})
+	})
 	mux.HandleFunc("POST /_agent/stop", func(w http.ResponseWriter, r *http.Request) {
 		if err := exec.Command("systemd-run", "--unit=containers-shutdown", "--on-active=2s", "--timer-property=AccuracySec=100ms", "systemctl", "poweroff", "--no-block").Run(); err != nil {
 			http.Error(w, err.Error(), 500)
@@ -89,6 +99,9 @@ func guestMain() error {
 // The kite-secrets oneshot is the sole writer, ordered before K3s. Keep the
 // existing Python-generated key file format so restarts never rotate identity.
 func initKiteSecrets(varLib string) error {
+	if err := initCNCMSecret(varLib); err != nil {
+		return err
+	}
 	keys := filepath.Join(varLib, "containers-anywhere/kite-secrets.json")
 	data := map[string]string{}
 	b, err := os.ReadFile(keys)
@@ -112,6 +125,42 @@ func initKiteSecrets(varLib string) error {
 		"apiVersion": "v1", "kind": "List", "items": []any{
 			map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]string{"name": "kite-system"}},
 			map[string]any{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]string{"name": "kite-secrets", "namespace": "kite-system"}, "stringData": data},
+		},
+	})
+}
+
+// CNCM's first-administrator token is generated once and persisted beside the
+// Kite keys so restarts keep the same Secret. It is only used to claim the
+// first CNCM account; the desktop panel hands it to the browser.
+func cncmToken(varLib string) (string, error) {
+	path := filepath.Join(varLib, "containers-anywhere/cncm-bootstrap.json")
+	var data map[string]string
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		data = map[string]string{"token": randomToken()}
+		if err = saveJSON(path, data); err != nil {
+			return "", err
+		}
+		return data["token"], nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if err = json.Unmarshal(b, &data); err != nil || len(data["token"]) < 24 {
+		return "", errors.New("invalid persisted CNCM bootstrap token; refusing to regenerate")
+	}
+	return data["token"], nil
+}
+
+func initCNCMSecret(varLib string) error {
+	token, err := cncmToken(varLib)
+	if err != nil {
+		return err
+	}
+	return saveJSON(filepath.Join(varLib, "rancher/k3s/server/manifests/00-cncm-bootstrap.json"), map[string]any{
+		"apiVersion": "v1", "kind": "List", "items": []any{
+			map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]string{"name": "cncm-system"}},
+			map[string]any{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]string{"name": "cncm-bootstrap", "namespace": "cncm-system"}, "stringData": map[string]string{"token": token}},
 		},
 	})
 }

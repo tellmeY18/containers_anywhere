@@ -1,0 +1,104 @@
+# Preinstalled CNCM (CARE manager). The cncm-bootstrap Secret and the
+# cncm-system namespace come from 00-cncm-bootstrap.json, written at boot.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cncm
+  namespace: cncm-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: containers-anywhere-cncm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: cncm
+    namespace: cncm-system
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cncm-data
+  namespace: cncm-system
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: 1Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cncm
+  namespace: cncm-system
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: cncm}
+  template:
+    metadata:
+      labels: {app: cncm}
+    spec:
+      serviceAccountName: cncm
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+        - name: cncm
+          image: ghcr.io/tellmey18/cncm:edge
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8080}]
+          env:
+            - {name: CNCM_ADDR, value: '0.0.0.0:8080'}
+            # Accept whichever gateway address the browser used (.local or .localhost, any port).
+            - {name: CNCM_ORIGIN, value: auto}
+            - {name: CNCM_DATA_DIR, value: /data}
+            - name: CNCM_BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef: {name: cncm-bootstrap, key: token}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8080}
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8080}
+          volumeMounts: [{name: data, mountPath: /data}]
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: cncm-data}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cncm
+  namespace: cncm-system
+spec:
+  selector: {app: cncm}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cncm
+  namespace: cncm-system
+spec:
+  ingressClassName: containers-anywhere
+  rules:
+    - host: cncm.cncm-system.local
+      http: &route
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: {service: {name: cncm, port: {number: 8080}}}
+    - host: cncm.cncm-system.localhost
+      http: *route

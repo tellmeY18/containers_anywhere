@@ -28,8 +28,12 @@ Its releases and history are retained. See [project history](docs/HISTORY.md).
 3. The launcher downloads its exact VM archive and, on Linux/Windows, its QEMU
    runtime. Download hashes are pinned **inside the launcher**. Interrupted
    transfers resume; archives are verified before extraction and activation.
-4. Once K3s and Kite are ready, choose **Open Kite**, create your administrator,
-   and use the preconfigured `local` cluster.
+4. Once the cluster is ready, choose **Open CNCM**: it is preinstalled, signs you up
+   with a pre-filled bootstrap token, and deploys CARE at `http://care.care.local`
+   (other devices on the LAN can use it too). Advanced users can choose
+   **Open Kite**, create an administrator and use the preconfigured `local` cluster.
+   The gateway listens on ports 80/443 (all interfaces) when the OS allows it,
+   otherwise on 8080/8443. The guest gets 8 GiB RAM on hosts with 16 GiB or more.
 5. Install workloads through Kite's Helm management or YAML editor. HTTP GET
    access through Kite's Kube Proxy is available for simple service previews.
 

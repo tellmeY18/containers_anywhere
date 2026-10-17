@@ -254,7 +254,7 @@ func startGateway(state string, vm machine) (*gateway, error) {
 		if caddySHA256 == "" {
 			return nil, nil
 		} // Unpackaged development launcher.
-		cfg := gatewayConfig{Port: 443, HTTPPort: 80, MDNS: true, Addresses: []string{"127.0.0.1"}, Namespaces: []string{"containers-demo"}, Domains: []string{"demo.local", "demo.localhost"}}
+		cfg := gatewayConfig{Port: 443, HTTPPort: 80, MDNS: true, Addresses: []string{"127.0.0.1"}, Namespaces: []string{"containers-demo", "cncm-system", "care"}, Domains: []string{"demo.local", "demo.localhost", "cncm-system.local", "cncm-system.localhost", "care.local", "care.localhost"}}
 		switch {
 		case canBind("127.0.0.1"):
 			links, linkErr := demoLinks(nil)

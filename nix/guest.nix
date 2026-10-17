@@ -66,7 +66,7 @@ in
     neededForBoot = true;
   };
   boot.initrd.supportedFilesystems = [ "erofs" "ext4" ];
-  boot.kernelModules = [ "vmw_vsock_virtio_transport" "virtio_net" "qemu_fw_cfg" "virtio_balloon" "overlay" "br_netfilter" ];
+  boot.kernelModules = [ "vmw_vsock_virtio_transport" "virtio_net" "qemu_fw_cfg" "virtio_balloon" "overlay" "br_netfilter" "nf_conntrack" ];
   boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
   networking.useDHCP = true;
   # Stable source identity for the node's authenticated workload relay. It is
@@ -87,6 +87,7 @@ in
     gracefulNodeShutdown.enable = true;
     images = [ config.services.k3s.package.airgap-images kite gateway.image demo ];
     manifests.kite.source = ./kite.yaml;
+    manifests.cncm.source = ./cncm.yaml;
     manifests.gateway.source = gateway.manifest;
     manifests.demo.source = pkgs.writeText "demo.yaml" (builtins.replaceStrings
       [ "@CADDY_VERSION@" ] [ pkgs.caddy.version ] (builtins.readFile ./demo.yaml));
