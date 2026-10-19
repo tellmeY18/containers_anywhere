@@ -55,7 +55,7 @@ func bootstrap(state string, progress func(string)) (string, error) {
 		if dir, ok := cachedBundle(root, want); ok {
 			progress("Reusing the appliance already verified on this computer.")
 			if runtime.GOOS != "darwin" {
-				if err := ensureRuntime(client, state, progress); err != nil {
+				if err := ensureRuntime(client, filepath.Dir(dir), progress); err != nil {
 					return "", err
 				}
 			}
@@ -70,23 +70,20 @@ func bootstrap(state string, progress func(string)) (string, error) {
 		return "", err
 	}
 	if runtime.GOOS != "darwin" {
-		if err := ensureRuntime(client, state, progress); err != nil {
+		if err := ensureRuntime(client, dest, progress); err != nil {
 			return "", err
 		}
 	}
 	return filepath.Join(dest, "bundle"), nil
 }
 
-func ensureRuntime(client *http.Client, state string, progress func(string)) error {
+// ensureRuntime installs QEMU beside the bundle (<applianceDir>/qemu), which is
+// where the VM launcher resolves it from.
+func ensureRuntime(client *http.Client, applianceDir string, progress func(string)) error {
 	if err := validDownload(runtimeURL, runtimeSHA256); err != nil {
 		return fmt.Errorf("launcher has no valid pinned QEMU runtime: %w; use a packaged release", err)
 	}
-	root := filepath.Join(state, "appliances")
-	dest := filepath.Join(root, runtimeSHA256)
-	if err := os.MkdirAll(dest, 0700); err != nil {
-		return err
-	}
-	return installArchive(client, runtimeURL, runtimeSHA256, filepath.Join(dest, "qemu"), progress)
+	return installArchive(client, runtimeURL, runtimeSHA256, filepath.Join(applianceDir, "qemu"), progress)
 }
 
 // cachedBundle finds an already-unpacked, fully verified appliance with the

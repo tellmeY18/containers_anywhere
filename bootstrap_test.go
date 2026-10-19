@@ -235,3 +235,51 @@ func TestCachedBundleIgnoresTamperedContent(t *testing.T) {
 		t.Fatal("reused a tampered bundle")
 	}
 }
+
+func tarGz(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	gz := gzip.NewWriter(&b)
+	tw := tar.NewWriter(gz)
+	for name, content := range files {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0600, Size: int64(len(content))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tw.Close()
+	gz.Close()
+	return b.Bytes()
+}
+
+// The VM launcher resolves QEMU as <bundle>/../qemu, so bootstrap must install
+// the runtime there for both fresh installs and cache reuse.
+func TestBootstrapInstallsRuntimeBesideBundle(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("macOS uses Virtualization.framework, not QEMU")
+	}
+	body := bundleArchive(t, testBundleManifest(t))
+	qemu := tarGz(t, map[string]string{"runtime.json": "{}"})
+	mux := http.NewServeMux()
+	mux.Handle("/appliance", rangedHandler(body, true))
+	mux.Handle("/qemu", rangedHandler(qemu, true))
+	server := httptest.NewTLSServer(mux)
+	defer server.Close()
+	newDownloadClient = server.Client
+	defer func() { newDownloadClient = downloadClient }()
+	applianceURL, applianceSHA256 = server.URL+"/appliance", sha256Text(body)
+	runtimeURL, runtimeSHA256 = server.URL+"/qemu", sha256Text(qemu)
+	defer func() { applianceURL, applianceSHA256, runtimeURL, runtimeSHA256 = "", "", "", "" }()
+	state := t.TempDir()
+	for _, pass := range []string{"fresh install", "cached reuse"} {
+		dir, err := bootstrap(state, func(string) {})
+		if err != nil {
+			t.Fatalf("%s: %v", pass, err)
+		}
+		if _, err := os.Stat(filepath.Join(filepath.Dir(dir), "qemu", "runtime.json")); err != nil {
+			t.Fatalf("%s: runtime not beside bundle: %v", pass, err)
+		}
+	}
+}
