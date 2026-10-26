@@ -3,9 +3,23 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestDesktopOffersGenericWorkloadsWithoutApplicationOnboarding(t *testing.T) {
+	for _, removed := range []string{"CNCM", "CARE", "cncmURL", "/#token="} {
+		if strings.Contains(desktopHTML, removed) {
+			t.Fatalf("application onboarding remains: %s", removed)
+		}
+	}
+	for _, required := range []string{"Open Kite", "gateway?.endpoints", "endpoint.ready", "endpoint.error", "endpoint.advertised", "textContent", "client reachability"} {
+		if !strings.Contains(desktopHTML, required) {
+			t.Fatalf("missing workload UI: %s", required)
+		}
+	}
+}
 
 func TestControlCallDoesNotFollowRedirectsOrLeakToken(t *testing.T) {
 	var leaked bool

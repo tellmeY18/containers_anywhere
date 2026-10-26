@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Boot a disposable VM; exercise Kite, a real workload, restart and cold restore."""
 import argparse
+import base64
 import http.cookiejar
 import json
 import os
@@ -48,7 +49,12 @@ def main():
     binary, bundle, state = args.binary.resolve(), args.bundle.resolve(), args.state.resolve()
     state.mkdir()  # Never use existing user data.
     gateway_root = None
-    (state / "gateway.json").write_text(json.dumps({"port": 18443, "httpPort": 18080, "namespaces": ["default"], "domains": ["default.localhost"]}))
+    gateway_config = json.dumps({"port": 18443, "httpPort": 18080,
+                                "namespaces": ["default", "containers-demo", "cncm-system", "care"],
+                                "domains": ["default.localhost", "demo.local", "demo.localhost", "cncm-system.local", "care.local"]}).encode()
+    (state / "gateway.json").write_bytes(gateway_config)
+    preserved = {}
+    legacy_token = base64.b64encode(secrets.token_bytes(32)).decode()
     admin = {"username": "mvptest", "password": secrets.token_urlsafe(24), "enableAnalytics": False}
     marker = None
     timeout = int(os.environ.get("CONTAINERS_SMOKE_BOOT_SECONDS", "600"))
@@ -75,6 +81,20 @@ def main():
             assert json.loads(request(c["AppURL"]+"/api/v1/bootstrap", opener=browser))["setup"]["initialized"]
             assert b"local" in request(c["AppURL"]+"/api/v1/clusters", opener=browser)
             if fresh:
+                for namespace in ["cncm-system", "care"]:
+                    try:
+                        request(c["AppURL"]+"/api/v1/namespaces/_all/"+namespace, opener=browser)
+                        raise AssertionError(f"Fresh universal appliance preinstalled {namespace}")
+                    except urllib.error.HTTPError as e:
+                        assert e.code == 404, f"Cannot inspect fresh namespaces: {e}"
+                    # Synthetic legacy-named objects catch name-specific cleanup;
+                    # this is not an actual CNCM/CARE application migration test.
+                    for resource in [
+                        {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": namespace}},
+                        {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "preserve-me", "namespace": namespace},
+                         "data": {"token": legacy_token}},
+                    ]:
+                        request(c["AppURL"]+"/api/v1/resources/apply", data={"yaml": json.dumps(resource), "namespace": namespace}, opener=browser)
                 # This is a real additional workload, with a PVC whose contents
                 # must survive both reboot and an encrypted backup round trip.
                 resources = [
@@ -97,6 +117,17 @@ def main():
                     ingress = {"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": {"name": "mvp-web", "namespace": "default"},
                                "spec": {"ingressClassName": "containers-anywhere", "rules": [{"host": "app.default.localhost", "http": {"paths": [{"path": "/", "pathType": "Prefix", "backend": {"service": {"name": "mvp-web", "port": {"number": 8080}}}}]}}]}}
                     request(c["AppURL"]+"/api/v1/resources/apply", data={"yaml": json.dumps(ingress), "namespace": "default"}, opener=browser)
+            for namespace in ["cncm-system", "care"]:
+                for path in ["/namespaces/_all/"+namespace, "/secrets/"+namespace+"/preserve-me"]:
+                    resource = json.loads(request(c["AppURL"]+"/api/v1"+path, opener=browser))
+                    identity = (resource["metadata"]["uid"], resource.get("data"))
+                    if fresh:
+                        preserved[path] = identity
+                    else:
+                        assert identity == preserved[path], f"Existing object was replaced or reset: {path}"
+                    if "data" in resource:
+                        assert resource["data"]["token"] == legacy_token, "Existing secret changed"
+            assert (directory / "gateway.json").read_bytes() == gateway_config, "Saved gateway grants were overwritten"
             nonlocal marker
             observed = wait_for(lambda: request(c["AppURL"]+"/api/v1/namespaces/default/services/mvp-web:8080/proxy/", opener=browser), process, timeout)
             if fresh:
@@ -121,6 +152,10 @@ def main():
                     return result.returncode == 0 and result.stdout == marker
 
                 wait_for(gateway_ready, process, timeout)
+                def publication_ready():
+                    status = json.loads(request(c["URL"]+"/control/gateway", c["Token"]))
+                    return any(e["url"] == target and e["ready"] and not e["advertised"] for e in status.get("endpoints", []))
+                wait_for(publication_ready, process, timeout)
                 demo_command = ["curl", "--silent", "--show-error", "--fail", "--noproxy", "*", "--max-time", "20",
                                 "--resolve", "demo.local:18080:127.0.0.1", "http://demo.local:18080/"]
                 last = []
@@ -144,7 +179,7 @@ def main():
                     result = subprocess.run(base + ["--cacert", str(root), target.rstrip("/")+path], capture_output=True)
                     assert result.returncode != 0, "Workload gateway exposed appliance management"
                 print("PASS: Caddy trusted HTTPS, Traefik Ingress, management isolation and persistent CA", flush=True)
-            print("PASS: Kite auth, local cluster, workload HTTP and persistent volume", flush=True)
+            print("PASS: Kite auth, generic workload/PVC, legacy-named namespace/secret identities and saved gateway grants", flush=True)
         finally:
             if c and process.poll() is None:
                 try:

@@ -11,6 +11,25 @@ shipped unless explicitly marked available. No CARE-specific work is included.
 - Empty-destination restore and exact-appliance compatibility checks.
 - Linux AMD64 KVM boot/restart/restore acceptance; Windows emulated boot/restart.
 
+## Universal defaults — implemented in source, acceptance pending
+
+- Fresh `develop` appliances preload K3s, Kite and the gateway diagnostic demo,
+  not CNCM/CARE. `care-mvp` remains unchanged.
+- Kite is the workload-management entry point; the 2-vCPU/4-GiB defaults have no
+  application-specific memory heuristic or automatic application opening.
+- Fresh gateways are loopback-only with demo-only grants. Explicit namespace/
+  domain grants govern all workload Ingresses, including optional CNCM/CARE.
+- Workload HTTPS probes and mDNS distinguish approved routes, responding
+  endpoints and announcements. DNS resolution is not remote reachability.
+- No existing workload deletion, secret/PVC reset, saved-config replacement or
+  appliance migration. Existing disks retain the exact-appliance requirement.
+
+Gate: fresh-install namespace checks; unchanged existing gateway settings and
+legacy-named namespace/secret identities; generic workload/PVC and Kite identity
+through reboot and encrypted restore. Synthetic legacy-named objects are not a
+real CNCM/CARE migration drill. Physical multi-device mDNS/firewall/trust tests
+remain required. No Gateway API or publication CRD/controller is shipped.
+
 ## R1 — Prove and inspect recovery points
 
 - Backup manifest: identity, timestamp, disk geometry, checksums, format and tool

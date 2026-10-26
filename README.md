@@ -21,6 +21,10 @@ CARE Anywhere's original code and documentation are preserved on
 [`archive/care-anywhere`](https://github.com/tellmeY18/containers_anywhere/tree/archive/care-anywhere).
 Its releases and history are retained. See [project history](docs/HISTORY.md).
 
+`develop` is the universal platform line; `care-mvp` remains the separately
+CARE-bundled line. The universal defaults below are source changes, not a change
+to already-published alpha 49. No optional application profile/catalog is shipped.
+
 ## User experience
 
 1. Install the **Containers Anywhere** DMG, EXE or AppImage.
@@ -28,17 +32,19 @@ Its releases and history are retained. See [project history](docs/HISTORY.md).
 3. The launcher downloads its exact VM archive and, on Linux/Windows, its QEMU
    runtime. Download hashes are pinned **inside the launcher**. Interrupted
    transfers resume; archives are verified before extraction and activation.
-4. Once the cluster is ready, choose **Open CNCM**: it is preinstalled, signs you up
-   with a pre-filled bootstrap token, and deploys CARE at `http://care.care.local`
-   (other devices on the LAN can use it too). Advanced users can choose
-   **Open Kite**, create an administrator and use the preconfigured `local` cluster.
-   The gateway listens on ports 80/443 (all interfaces) when the OS allows it,
-   otherwise on 8080/8443. The guest gets 8 GiB RAM on hosts with 16 GiB or more.
+4. Once the cluster is ready, choose **Open Kite**, create an administrator and
+   use the preconfigured `local` cluster. Fresh `develop` appliances do not install
+   CNCM or CARE. The gateway defaults to loopback-only 8080/8443 with only the
+   bundled diagnostic demo approved; publishing workloads to the LAN requires
+   explicit [gateway configuration](docs/NETWORKING.md).
 5. Install workloads through Kite's Helm management or YAML editor. HTTP GET
    access through Kite's Kube Proxy is available for simple service previews.
 
 Closing the browser keeps the VM running. Use **Stop cluster** or **Quit** in
 the control panel. Restart preserves your cluster, Kite account and local volumes.
+Changing defaults does not uninstall existing CNCM/CARE, delete their PVCs or
+secrets, or replace saved gateway grants. Existing data still requires its exact
+original appliance; this is not an in-place appliance migration.
 
 ### Platforms
 
@@ -189,8 +195,11 @@ python3 scripts/package.py macos --arch arm64 --version 0.1.0-mvp.1 \
 ## MVP boundaries
 
 The source tree includes a native Caddy/Traefik gateway with a preloaded branded
-demo.local workload and host-side IPv4 mDNS, pending CI and real-platform
-acceptance. See [networking setup](docs/NETWORKING.md) for address, port, firewall
+demo workload and opt-in host-side IPv4 mDNS for approved, responding `.local`
+workloads, pending CI and real-platform acceptance. The panel distinguishes
+approved routes from responding endpoints and mDNS announcements; none proves
+remote firewall passage or client certificate trust.
+See [networking setup](docs/NETWORKING.md) for address, port, firewall
 and certificate requirements. This is not part of already-published alpha 49.
 
 This is a local single-node environment, not a highly available cluster or a
