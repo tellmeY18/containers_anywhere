@@ -15,45 +15,27 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tellmeY18/containers_anywhere/internal/publication"
 )
 
 // Packaging pins the exact adjacent helper, including its final macOS signature.
 var caddySHA256 string
 
-const gatewayClass = "containers-anywhere"
-
 type gatewayConfig struct {
-	Port       int      `json:"port"`
-	HTTPPort   int      `json:"httpPort,omitempty"`
-	Addresses  []string `json:"addresses,omitempty"`
-	MDNS       bool     `json:"mdns,omitempty"`
-	Namespaces []string `json:"namespaces"`
-	Domains    []string `json:"domains"`
-}
-
-var dnsLabel = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
-
-func validGatewayHost(host string) bool {
-	if len(host) > 253 || !strings.Contains(host, ".") || net.ParseIP(host) != nil {
-		return false
-	}
-	for _, label := range strings.Split(host, ".") {
-		if !dnsLabel.MatchString(label) {
-			return false
-		}
-	}
-	return true
+	Port      int      `json:"port"`
+	HTTPPort  int      `json:"httpPort,omitempty"`
+	Addresses []string `json:"addresses,omitempty"`
 }
 
 func (c gatewayConfig) validate() error {
-	if c.Port < 1 || c.Port > 65535 || c.HTTPPort < 0 || c.HTTPPort > 65535 || c.Port == c.HTTPPort || len(c.Namespaces) == 0 || len(c.Namespaces) > 32 || len(c.Domains) == 0 || len(c.Domains) > 32 {
-		return errors.New("gateway requires distinct ports 1..65535 and 1..32 namespaces and domains")
+	if c.Port < 1 || c.Port > 65535 || c.HTTPPort < 1 || c.HTTPPort > 65535 || c.Port == c.HTTPPort {
+		return errors.New("gateway requires distinct HTTP and HTTPS ports 1..65535")
 	}
 	if len(c.Addresses) > 16 {
 		return errors.New("too many gateway addresses")
@@ -70,21 +52,8 @@ func (c gatewayConfig) validate() error {
 			return fmt.Errorf("gateway address %q must be explicit loopback or private LAN IPv4", address)
 		}
 	}
-	if c.MDNS && c.HTTPPort == 0 {
-		return errors.New("mDNS requires an HTTP listener for the demo")
-	}
-	if c.MDNS && !slices.Contains(c.Addresses, "127.0.0.1") && !slices.Contains(c.Addresses, wildcardAddress) {
-		return errors.New("mDNS health verification requires 127.0.0.1 among gateway addresses")
-	}
-	for _, ns := range c.Namespaces {
-		if !dnsLabel.MatchString(ns) || ns == "kite-system" || ns == "containers-gateway" || strings.HasPrefix(ns, "kube-") {
-			return fmt.Errorf("namespace %q cannot publish workloads", ns)
-		}
-	}
-	for _, domain := range c.Domains {
-		if !validGatewayHost(domain) || !(strings.HasSuffix(domain, ".localhost") || strings.HasSuffix(domain, ".local")) {
-			return errors.New("gateway domains must be explicit .localhost or .local suffixes")
-		}
+	if len(c.Addresses) > 0 && !slices.Contains(c.Addresses, "127.0.0.1") && !slices.Contains(c.Addresses, wildcardAddress) {
+		return errors.New("gateway probes require a loopback listener")
 	}
 	return nil
 }
@@ -99,22 +68,6 @@ func (c gatewayConfig) listeners(port int) []string {
 		listeners = append(listeners, net.JoinHostPort(address, fmt.Sprint(port)))
 	}
 	return listeners
-}
-
-func (c gatewayConfig) allows(host, namespace string) bool {
-	if !validGatewayHost(host) || !slices.Contains(c.Namespaces, namespace) {
-		return false
-	}
-	demo := namespace == "containers-demo" && (host == "demo.local" || host == "demo.localhost")
-	if !demo && !(strings.HasSuffix(host, "."+namespace+".localhost") || strings.HasSuffix(host, "."+namespace+".local")) {
-		return false
-	}
-	for _, domain := range c.Domains {
-		if host == domain || strings.HasSuffix(host, "."+domain) {
-			return true
-		}
-	}
-	return false
 }
 
 func configureGateway(state, file string) error {
@@ -155,58 +108,10 @@ func decodeGatewayConfig(b []byte, c *gatewayConfig) error {
 	return nil
 }
 
-type gatewayIngress struct {
-	Metadata struct {
-		Name      string `json:"name"`
-		Namespace string `json:"namespace"`
-	} `json:"metadata"`
-	Spec struct {
-		Class string `json:"ingressClassName"`
-		Rules []struct {
-			Host string `json:"host"`
-		} `json:"rules"`
-	} `json:"spec"`
-}
-
-type gatewaySnapshot struct {
-	Items []gatewayIngress `json:"items"`
-}
-
-// Reject an entire hostname on conflicting ownership; do not depend on resource
-// list ordering. Traefik admission restricts routes to the same owner namespace.
-func publishedHosts(c gatewayConfig, snapshot gatewaySnapshot) []string {
-	owners := map[string]string{}
-	for _, ingress := range snapshot.Items {
-		if ingress.Spec.Class != gatewayClass {
-			continue
-		}
-		if ingress.Metadata.Namespace == "containers-demo" && ingress.Metadata.Name != "demo" {
-			continue
-		}
-		for _, rule := range ingress.Spec.Rules {
-			if !c.allows(rule.Host, ingress.Metadata.Namespace) {
-				continue
-			}
-			if owner, ok := owners[rule.Host]; ok && owner != ingress.Metadata.Namespace {
-				owners[rule.Host] = ""
-			} else if !ok {
-				owners[rule.Host] = ingress.Metadata.Namespace
-			}
-		}
-	}
-	var hosts []string
-	for host, owner := range owners {
-		if owner != "" {
-			hosts = append(hosts, host)
-		}
-	}
-	slices.Sort(hosts)
-	return hosts
-}
-
 type gateway struct {
 	mu             sync.RWMutex
 	hosts          []string
+	publications   []publication.Record
 	err            string
 	config         gatewayConfig
 	server         *http.Server
@@ -225,18 +130,19 @@ type gateway struct {
 }
 
 type gatewayEndpoint struct {
-	URL        string `json:"url"`
-	Ready      bool   `json:"ready"`
-	Error      string `json:"error,omitempty"`
-	Advertised bool   `json:"advertised"`
+	URL              string `json:"url"`
+	Ready            bool   `json:"ready"`
+	Error            string `json:"error,omitempty"`
+	Advertised       bool   `json:"advertised"`
+	CertificateReady bool   `json:"certificateReady"`
 }
 
 func (g *gateway) status() map[string]any {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	urls := []string{}
-	for _, host := range g.hosts {
-		urls = append(urls, fmt.Sprintf("https://%s:%d", host, g.config.Port))
+	for _, record := range g.publications {
+		urls = append(urls, strings.TrimSuffix(g.endpoint(record).url(), "/"))
 	}
 	demoURL := ""
 	for _, endpoint := range g.endpoints {
@@ -253,13 +159,35 @@ func (g *gateway) permits(host string) bool {
 	return slices.Contains(g.hosts, host)
 }
 
+func (g *gateway) record(host string) (publication.Record, bool) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	for _, record := range g.publications {
+		if record.Hostname == host {
+			return record, true
+		}
+	}
+	return publication.Record{}, false
+}
+
+func (g *gateway) endpoint(record publication.Record) mdnsEndpoint {
+	e := mdnsEndpoint{Host: record.Hostname, Port: uint16(g.config.Port)}
+	if record.TLS.Mode == "HTTP" {
+		e.HTTP, e.Port = true, uint16(g.config.HTTPPort)
+	}
+	return e
+}
+
 func loadGatewayConfig(state string) (*gatewayConfig, error) {
 	b, err := os.ReadFile(filepath.Join(state, "gateway.json"))
 	if os.IsNotExist(err) {
 		if caddySHA256 == "" {
 			return nil, nil
 		} // Unpackaged development launcher.
-		cfg := gatewayConfig{Port: 8443, HTTPPort: 8080, Addresses: []string{"127.0.0.1"}, Namespaces: []string{"containers-demo"}, Domains: []string{"demo.local", "demo.localhost"}}
+		cfg := gatewayConfig{Port: 443, HTTPPort: 80, Addresses: []string{wildcardAddress}}
+		if !canBind(wildcardAddress) {
+			cfg.Port, cfg.HTTPPort = 8443, 8080
+		}
 		if err = saveJSON(filepath.Join(state, "gateway.json"), cfg); err != nil {
 			return nil, err
 		}
@@ -400,6 +328,7 @@ func startGateway(state string, vm machine) (*gateway, error) {
 		for {
 			g.refresh(ctx, client)
 			g.refreshDiscovery(ctx)
+			g.reportPublications(ctx, client)
 			select {
 			case <-ctx.Done():
 				return
@@ -415,7 +344,7 @@ func startGateway(state string, vm machine) (*gateway, error) {
 func (g *gateway) bridgeHandler(token, address string, proxy http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/"+token+"/ask" && r.Method == "GET" && r.Host == address {
-			if g.permits(r.URL.Query().Get("domain")) {
+			if record, ok := g.record(r.URL.Query().Get("domain")); ok && record.TLS.Mode == "LocalCA" {
 				w.WriteHeader(200)
 			} else {
 				w.WriteHeader(403)
@@ -426,8 +355,20 @@ func (g *gateway) bridgeHandler(token, address string, proxy http.Handler) http.
 		if h, _, err := net.SplitHostPort(host); err == nil {
 			host = h
 		}
-		if r.Header.Get("X-CA-Gateway") != token || !g.permits(host) || r.Method == "CONNECT" {
+		record, ok := g.record(host)
+		if r.Header.Get("X-CA-Gateway") != token || !ok || r.Method == "CONNECT" {
 			http.Error(w, "Unpublished hostname", 403)
+			return
+		}
+		if !record.LAN {
+			ip := net.ParseIP(r.Header.Get("X-Forwarded-For"))
+			if ip == nil || !ip.IsLoopback() {
+				http.Error(w, "Publication is loopback-only", 403)
+				return
+			}
+		}
+		if record.TLS.Mode == "HTTP" && r.Header.Get("X-Forwarded-Proto") != "http" {
+			http.Error(w, "HTTPS is disabled for this publication", 403)
 			return
 		}
 		if r.URL.Path == "/root.crt" && r.Method == "GET" {
@@ -435,7 +376,7 @@ func (g *gateway) bridgeHandler(token, address string, proxy http.Handler) http.
 			http.ServeFile(w, r, filepath.Join(g.state, "gateway", "caddy", "pki", "authorities", "local", "root.crt"))
 			return
 		}
-		if r.Header.Get("X-Forwarded-Proto") == "http" && host != "demo.local" && host != "demo.localhost" {
+		if r.Header.Get("X-Forwarded-Proto") == "http" && record.TLS.Mode == "LocalCA" {
 			authority := host
 			if g.config.Port != 443 {
 				authority = net.JoinHostPort(host, fmt.Sprint(g.config.Port))
@@ -443,20 +384,30 @@ func (g *gateway) bridgeHandler(token, address string, proxy http.Handler) http.
 			http.Redirect(w, r, "https://"+authority+r.URL.RequestURI(), http.StatusPermanentRedirect)
 			return
 		}
+		r.Header.Set("X-Forwarded-Host", r.Host)
 		proxy.ServeHTTP(w, r)
 	})
 }
 
 func (g *gateway) refresh(ctx context.Context, client *http.Client) {
-	req, _ := http.NewRequestWithContext(ctx, "GET", "http://guest/_agent/gateway/ingresses", nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", "http://guest/_agent/gateway/publications", nil)
 	resp, err := client.Do(req)
-	var snapshot gatewaySnapshot
+	var snapshot publication.Snapshot
 	if err == nil {
 		defer resp.Body.Close()
 		if resp.StatusCode != 200 {
 			err = fmt.Errorf("gateway discovery unavailable (%d)", resp.StatusCode)
 		} else {
-			err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&snapshot)
+			decoder := json.NewDecoder(io.LimitReader(resp.Body, (1<<20)+1))
+			decoder.DisallowUnknownFields()
+			err = decoder.Decode(&snapshot)
+			if err == nil {
+				if decoder.Decode(new(any)) != io.EOF {
+					err = errors.New("invalid publication snapshot tail")
+				} else {
+					err = snapshot.Validate()
+				}
+			}
 		}
 	}
 	g.mu.Lock()
@@ -465,18 +416,53 @@ func (g *gateway) refresh(ctx context.Context, client *http.Client) {
 		g.err = "Publication discovery unavailable; retaining last approved hosts"
 		return
 	}
-	hosts := publishedHosts(g.config, snapshot)
-	if !slices.Equal(hosts, g.hosts) {
+	publication.Sort(snapshot.Items)
+	if !slices.Equal(snapshot.Items, g.publications) {
 		if g.advertiser != nil {
 			g.advertiser.Close()
 			g.advertiser = nil
 		}
 		g.endpoints = nil
 	}
-	g.hosts = hosts
+	g.publications = snapshot.Items
+	g.hosts = nil
+	for _, record := range snapshot.Items {
+		g.hosts = append(g.hosts, record.Hostname)
+	}
 	g.err = ""
 }
 
+func (g *gateway) reportPublications(ctx context.Context, client *http.Client) {
+	g.mu.RLock()
+	feedback := []publication.Feedback{}
+	if g.err == "" {
+		for _, record := range g.publications {
+			f := publication.Feedback{Record: record, URL: g.endpoint(record).url(), DiscoveryError: g.discoveryError}
+			for _, e := range g.endpoints {
+				if e.URL == f.URL {
+					f.Ready, f.CertificateReady, f.Advertised, f.Error = e.Ready, e.CertificateReady, e.Advertised, e.Error
+				}
+			}
+			feedback = append(feedback, f)
+		}
+	}
+	g.mu.RUnlock()
+	b, _ := json.Marshal(feedback)
+	req, _ := http.NewRequestWithContext(ctx, "POST", "http://guest/_agent/gateway/publication-status", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err == nil {
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNoContent {
+			err = fmt.Errorf("status feedback HTTP %d", resp.StatusCode)
+		}
+	}
+	if err != nil {
+		g.mu.Lock()
+		g.err = "Publication status feedback unavailable: " + err.Error()
+		g.mu.Unlock()
+	}
+}
 func (g *gateway) Close() {
 	if g == nil {
 		return
@@ -634,3 +620,18 @@ func caddyConfig(c gatewayConfig, storage, upstream, token string) map[string]an
 }
 
 const wildcardAddress = "0.0.0.0"
+
+// Occupied ports fail startup explicitly; only missing low-port permission
+// selects high ports. Wildcard binding also supports macOS's low-port policy.
+func canBind(address string) bool {
+	for _, port := range []int{443, 80} {
+		l, err := net.Listen("tcp4", net.JoinHostPort(address, fmt.Sprint(port)))
+		if errors.Is(err, os.ErrPermission) {
+			return false
+		}
+		if l != nil {
+			l.Close()
+		}
+	}
+	return true
+}

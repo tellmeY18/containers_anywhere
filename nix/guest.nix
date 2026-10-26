@@ -10,6 +10,7 @@ let
         ../internal/guest
         ../internal/boottls
         ../internal/protocol
+        ../internal/publication
         ../internal/atomicfile
         ../go.mod
         ../go.sum
@@ -93,6 +94,7 @@ in
     images = [ config.services.k3s.package.airgap-images kite gateway.image demo ];
     manifests.kite.source = ./kite.yaml;
     manifests.gateway.source = gateway.manifest;
+    manifests.publication.source = ./publication.yaml;
     manifests.demo.source = pkgs.writeText "demo.yaml" (builtins.replaceStrings
       [ "@CADDY_VERSION@" ] [ pkgs.caddy.version ] (builtins.readFile ./demo.yaml));
   };

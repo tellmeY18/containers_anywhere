@@ -1,0 +1,73 @@
+# Administrator-installed authorization. Bind only the intended workload SA.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: example
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: workload-manager
+  namespace: example
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workload-manager-publication
+  namespace: example
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: containers-workload-publisher
+subjects:
+  - kind: ServiceAccount
+    name: workload-manager
+    namespace: example
+---
+# Managed by the workload identity. Install pods labelled app=web separately.
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: example
+spec:
+  type: ClusterIP
+  selector:
+    app: web
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  namespace: example
+spec:
+  ingressClassName: containers-anywhere
+  rules:
+    - host: app.example.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 8080
+---
+apiVersion: networking.containersanywhere.dev/v1alpha1
+kind: WorkloadPublication
+metadata:
+  name: web
+  namespace: example
+spec:
+  ingressRef: web
+  hostname: app.example.local
+  enabled: true
+  lan: true
+  mdns: true
+  tls:
+    mode: LocalCA

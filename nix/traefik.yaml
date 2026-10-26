@@ -44,11 +44,42 @@ kind: IngressClass
 metadata:
   name: containers-anywhere
 spec:
+  controller: networking.containersanywhere.dev/publication-controller
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: containers-anywhere-published
+spec:
   controller: traefik.io/ingress-controller
 ---
-# A namespace owns only <name>.<namespace>.localhost or <name>.<namespace>.local.
-# No annotations that could enable cross-provider routing or forwarded-header
-# changes; no catch-all routes. Host publication is a second, independent grant.
+# Only the appliance agent's local K3s administrator may create derived routes.
+# Reserve both old and new object identities to prevent class-change bypasses.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: containers-publication-derived-routes
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [networking.k8s.io]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [ingresses]
+  validations:
+    - expression: "request.userInfo.username == 'system:admin' || (!(object != null && (object.metadata.name.startsWith('ca-pub-') || (has(object.spec.ingressClassName) && object.spec.ingressClassName == 'containers-anywhere-published') || (has(object.metadata.annotations) && 'kubernetes.io/ingress.class' in object.metadata.annotations && object.metadata.annotations['kubernetes.io/ingress.class'] == 'containers-anywhere-published'))) && !(oldObject != null && (oldObject.metadata.name.startsWith('ca-pub-') || (has(oldObject.spec.ingressClassName) && oldObject.spec.ingressClassName == 'containers-anywhere-published'))))"
+      message: Derived publication routes are owned by the appliance controller.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: containers-publication-derived-routes
+spec:
+  policyName: containers-publication-derived-routes
+  validationActions: [Deny]
+---
+# Input routes never reach Traefik directly.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -145,7 +176,7 @@ spec:
             - --ping=true
             - --ping.entrypoint=health
             - --providers.kubernetesingress=true
-            - --providers.kubernetesingress.ingressclass=containers-anywhere
+            - --providers.kubernetesingress.ingressclass=containers-anywhere-published
             - --providers.kubernetesingress.allowexternalnameservices=false
             - --providers.kubernetesingress.allowemptyservices=true
             - --providers.kubernetesingress.strictprefixmatching=true
