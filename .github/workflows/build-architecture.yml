@@ -223,7 +223,8 @@ jobs:
           mkdir -p dist/update-candidate/bundle
           tar -xzf dist/update-candidate-amd64.tar.gz -C dist/update-candidate/bundle
           python scripts/smoke.py --binary dist/releases/stage-linux-amd64/containers-anywhere/containers-anywhere \
-            --bundle dist/acceptance/bundle --state dist/smoke-update --gateway --update-bundle dist/update-candidate/bundle
+            --bundle dist/acceptance/bundle --state dist/smoke-update --gateway --update-bundle dist/update-candidate/bundle \
+            --runtime-archive dist/releases/runtime-linux-amd64.tar.gz
       # Windows WHPX has no hosted runner, so replay its machine/CPU pair under
       # KVM. This checks the configuration WHPX depends on, not WHPX itself.
       - name: Linux KVM boot with the WHPX machine and CPU model

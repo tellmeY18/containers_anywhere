@@ -535,18 +535,18 @@ func verifyUpdatePoint(state string, j updateJournal) (updatePoint, error) {
 		if !validUpdatePath(name) || !fileHashMatches(filepath.Join(root, filepath.FromSlash(name)), file.SHA256) {
 			return point, fmt.Errorf("update recovery integrity failure: %s; preserve all copies", name)
 		}
-		old, err := verifyBundle(filepath.Join(root, "original", "bundle"))
-		if err != nil || !compatibleData(old, j.Original) {
-			return point, errors.New("recovery appliance does not match original identity")
-		}
-		selected, err := readManifest(filepath.Join(root, "state", "release.json"))
-		if err != nil || !compatibleData(selected, j.Original) {
-			return point, errors.New("recovery disk identity does not match original appliance")
-		}
-		if runtime.GOOS != "darwin" {
-			if err := verifyRuntime(filepath.Join(root, "original", "qemu")); err != nil {
-				return point, err
-			}
+	}
+	old, err := verifyBundle(filepath.Join(root, "original", "bundle"))
+	if err != nil || !compatibleData(old, j.Original) {
+		return point, errors.New("recovery appliance does not match original identity")
+	}
+	selected, err := readManifest(filepath.Join(root, "state", "release.json"))
+	if err != nil || !compatibleData(selected, j.Original) {
+		return point, errors.New("recovery disk identity does not match original appliance")
+	}
+	if runtime.GOOS != "darwin" {
+		if err := verifyRuntime(filepath.Join(root, "original", "qemu")); err != nil {
+			return point, err
 		}
 	}
 	return point, nil

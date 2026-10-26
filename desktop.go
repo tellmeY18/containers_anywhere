@@ -151,7 +151,18 @@ func desktop(state, bundle string) error {
 		if activate {
 			args = []string{"update", "--operation", "activate", "--accept-external-effects", "--state", state, "--port", "0", "--no-open"}
 		} else if bundle != "" {
-			args = append(args, "--bundle", bundle)
+			useOriginal := true
+			if selected, readErr := readManifest(filepath.Join(state, "release.json")); readErr == nil {
+				retained, retainedErr := retainedUpdateBundle(state, selected)
+				if retainedErr != nil {
+					f.Close()
+					return retainedErr
+				}
+				useOriginal = retained == ""
+			}
+			if useOriginal {
+				args = append(args, "--bundle", bundle)
+			}
 		}
 		cmd := exec.Command(exe, args...)
 		cmd.Stdout, cmd.Stderr = f, f

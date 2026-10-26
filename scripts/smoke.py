@@ -46,6 +46,15 @@ def launch_command(binary, state, bundle=None):
     return command
 
 
+def cache_runtime(state, bundle, archive):
+    with archive.open("rb") as f:
+        digest = hashlib.file_digest(f, "sha256").hexdigest()
+    target = state / "runtimes" / digest / "qemu"
+    if not target.exists():
+        shutil.copytree(bundle.parent / "qemu", target, copy_function=os.link)
+        (target / ".archive-sha256").write_text(digest)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
@@ -73,6 +82,8 @@ def main():
         label = "fresh" if fresh else "restart"
         log = (directory / (label + "-smoke.log")).open("w")
         selected_binary = args.replacement_binary.resolve() if replacement else binary
+        if recovery_bundle is not None:
+            selected_binary = recovery_bundle.parent / ("launcher.exe" if os.name == "nt" else "launcher")
         selected_bundle = None if automatic or replacement or (fresh and args.download) else (recovery_bundle or bundle)
         command = launch_command(selected_binary, directory, selected_bundle)
         if update:
@@ -226,18 +237,17 @@ def main():
             raise ValueError("Replacement acceptance needs its exact runtime archive")
         original = (state / "release.json").read_bytes()
         shutil.copytree(bundle, state / "appliances/acceptance/bundle", copy_function=os.link)
-        with args.runtime_archive.open("rb") as f:
-            runtime_sha = hashlib.file_digest(f, "sha256").hexdigest()
         if not args.download:
-            runtime = state / "runtimes" / runtime_sha / "qemu"
-            shutil.copytree(bundle.parent / "qemu", runtime, copy_function=os.link)
-            (runtime / ".archive-sha256").write_text(runtime_sha)
+            cache_runtime(state, bundle, args.runtime_archive)
         boot(state, replacement=True)
         assert (state / "release.json").read_bytes() == original, "App replacement changed appliance identity"
         print("PASS: replacement app retains exact appliance, Kite identity and PVC with no appliance download", flush=True)
     else:
         boot(state)
     if args.update_bundle:
+        if not args.runtime_archive:
+            raise ValueError("Update restart acceptance needs the app's exact pinned runtime archive")
+        cache_runtime(state, bundle, args.runtime_archive)
         candidate = args.update_bundle.resolve()
         original_identity = json.loads((state / "release.json").read_text())
         candidate_identity = json.loads((candidate / "manifest.json").read_text())

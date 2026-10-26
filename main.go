@@ -233,6 +233,12 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 	if activate || retained {
 		m.hostRuntime = filepath.Join(filepath.Dir(bundle), "original", "qemu")
 	}
+	if retained && runtime.GOOS != "darwin" && (runtimeURL != "" || runtimeSHA256 != "") {
+		if err := ensureRuntime(newDownloadClient(), runtimeCache(state), func(s string) { log.Print(s) }); err != nil {
+			return err
+		}
+		m.hostRuntime = filepath.Join(runtimeCache(state), "qemu")
+	}
 	if downloaded {
 		m.hostRuntime = filepath.Join(runtimeCache(state), "qemu")
 	}
