@@ -155,8 +155,8 @@ func backup(state, file string) error {
 		return e
 	}
 	defer unlock()
-	if _, e = os.Lstat(filepath.Join(state, "update.json")); !os.IsNotExist(e) {
-		return errors.New("update is unconfirmed; recover the pre-update snapshot before backing up")
+	if e := checkUpdateStart(state); e != nil {
+		return fmt.Errorf("update is unconfirmed; commit or cancel before a normal backup (cold recovery point remains retained): %w", e)
 	}
 	// A surviving gateway supervisor must finish reaping Caddy before its CA
 	// store can be read, even if the original launcher crashed.

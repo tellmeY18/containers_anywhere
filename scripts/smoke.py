@@ -48,6 +48,15 @@ def launch_command(binary, state, bundle=None):
     return command
 
 
+def cache_runtime(state, bundle, archive):
+    with archive.open("rb") as f:
+        digest = hashlib.file_digest(f, "sha256").hexdigest()
+    target = state / "runtimes" / digest / "qemu"
+    if not target.exists():
+        shutil.copytree(bundle.parent / "qemu", target, copy_function=os.link)
+        (target / ".archive-sha256").write_text(digest)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
@@ -58,6 +67,7 @@ def main():
     parser.add_argument("--replacement-binary", type=Path, help="restart automatically with a different app recommendation")
     parser.add_argument("--runtime-archive", type=Path, help="exact QEMU archive pinned by the replacement app")
     parser.add_argument("--download", action="store_true", help="fresh boot through the packaged launcher's actual public download pins")
+    parser.add_argument("--update-bundle", type=Path, help="distinct current data-contract appliance for explicit KVM update/recovery drill")
     args = parser.parse_args()
     binary, bundle, state = args.binary.resolve(), args.bundle.resolve(), args.state.resolve()
     state.mkdir()  # Never use existing user data.
@@ -66,14 +76,21 @@ def main():
     (state / "gateway.json").write_bytes(gateway_config)
     admin = {"username": "mvptest", "password": secrets.token_urlsafe(24), "enableAnalytics": False}
     marker = None
+    publication_identity = None
     timeout = int(os.environ.get("CONTAINERS_SMOKE_BOOT_SECONDS", "600"))
 
-    def boot(directory, fresh=False, replacement=False):
+    def boot(directory, fresh=False, replacement=False, update=False, automatic=False, recovery_bundle=None,
+             commit=True, write_update_marker=False):
         label = "fresh" if fresh else "restart"
         log = (directory / (label + "-smoke.log")).open("w")
         selected_binary = args.replacement_binary.resolve() if replacement else binary
-        selected_bundle = None if replacement or (fresh and args.download) else bundle
+        if recovery_bundle is not None:
+            selected_binary = recovery_bundle.parent / ("launcher.exe" if os.name == "nt" else "launcher")
+        selected_bundle = None if automatic or replacement or (fresh and args.download) else (recovery_bundle or bundle)
         command = launch_command(selected_binary, directory, selected_bundle)
+        if update:
+            command = [str(binary), "update", "--operation", "activate", "--accept-external-effects",
+                       "--state", str(directory), "--port", "0", "--no-open"]
         process = subprocess.Popen(command, stdout=log, stderr=log,
                                    env=dict(os.environ, CONTAINERS_NO_BROWSER="1"))
         c = None
@@ -140,6 +157,15 @@ def main():
                     publication_acceptance(c["AppURL"], browser, request, wait_for, process,
                                            directory / "gateway/caddy/pki/authorities/local/root.crt",
                                            marker, timeout)
+                obj = wait_for(lambda: json.loads(request(
+                    c["AppURL"] + "/api/v1/workloadpublications.networking.containersanywhere.dev/default/mvp-web",
+                    opener=browser)), process, timeout)
+                observed_identity = (obj["metadata"]["uid"], obj["metadata"]["generation"], obj["spec"])
+                nonlocal publication_identity
+                if fresh:
+                    publication_identity = observed_identity
+                else:
+                    assert observed_identity == publication_identity, "WorkloadPublication identity/spec changed across update/retry/recovery"
                 wait_for(lambda: "https://app.default.localhost:18443" in json.loads(request(c["URL"]+"/control/gateway", c["Token"])).get("urls", []), process, timeout)
                 # curl uses --resolve so .localhost DNS support is not assumed.
                 # First contact triggers certificate issuance, without trusting it.
@@ -187,6 +213,26 @@ def main():
             print("PASS: Kite auth, current protocol, generic workload/PVC and persistent listener settings", flush=True)
             if fresh and args.download:
                 print("PASS: actual public pinned appliance/runtime bootstrap into fresh state", flush=True)
+            if write_update_marker:
+                marker = (secrets.token_hex(24) + "\n").encode()
+                job = {"apiVersion": "batch/v1", "kind": "Job",
+                       "metadata": {"name": "update-write", "namespace": "default"},
+                       "spec": {"template": {"spec": {"restartPolicy": "Never", "containers": [
+                           {"name": "write", "image": "busybox:1.37.0",
+                            "command": ["sh", "-c", "printf '%s\\n' '" + marker.decode().strip() + "' > /data/index.html"],
+                            "volumeMounts": [{"name": "data", "mountPath": "/data"}]}],
+                           "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "mvp-data"}}]}}}}
+                request(c["AppURL"]+"/api/v1/resources/apply", data={"yaml": json.dumps(job), "namespace": "default"}, opener=browser)
+                wait_for(lambda: request(c["AppURL"]+"/api/v1/namespaces/default/services/mvp-web:8080/proxy/",
+                                         opener=browser) == marker, process, timeout)
+            if update and commit:
+                # Login above verifies the original administrator; the HTTP
+                # marker verifies real PVC data, not only launcher/K3s health.
+                subprocess.run([str(binary), "update", "--operation", "commit",
+                                "--accept-workload-validation", "--state", str(directory)], check=True)
+                journal = json.loads((directory / "update.json").read_text())
+                assert journal["phase"] == "committed"
+                assert journal["validated_at"]
         finally:
             if c and process.poll() is None:
                 try:
@@ -214,17 +260,40 @@ def main():
             raise ValueError("Replacement acceptance needs its exact runtime archive")
         original = (state / "release.json").read_bytes()
         shutil.copytree(bundle, state / "appliances/acceptance/bundle", copy_function=os.link)
-        with args.runtime_archive.open("rb") as f:
-            runtime_sha = hashlib.file_digest(f, "sha256").hexdigest()
         if not args.download:
-            runtime = state / "runtimes" / runtime_sha / "qemu"
-            shutil.copytree(bundle.parent / "qemu", runtime, copy_function=os.link)
-            (runtime / ".archive-sha256").write_text(runtime_sha)
+            cache_runtime(state, bundle, args.runtime_archive)
         boot(state, replacement=True)
         assert (state / "release.json").read_bytes() == original, "App replacement changed appliance identity"
         print("PASS: replacement app retains exact appliance, Kite identity and PVC with no appliance download", flush=True)
     else:
         boot(state)
+    if args.update_bundle:
+        if not args.runtime_archive:
+            raise ValueError("Update restart acceptance needs the app's exact pinned runtime archive")
+        cache_runtime(state, bundle, args.runtime_archive)
+        candidate = args.update_bundle.resolve()
+        original_identity = json.loads((state / "release.json").read_text())
+        candidate_identity = json.loads((candidate / "manifest.json").read_text())
+        assert candidate_identity["system"] != original_identity["system"], "Update drill needs a distinct built root image"
+        subprocess.run([str(binary), "update", "--operation", "prepare", "--state", str(state),
+                        "--bundle", str(candidate), "--original-bundle", str(bundle)], check=True)
+        assert json.loads((state / "release.json").read_text()) == original_identity
+        cold_marker = marker
+        boot(state, update=True, commit=False, write_update_marker=True)
+        assert json.loads((state / "update.json").read_text())["phase"] == "candidate-running"
+        boot(state, update=True)  # Must retain the new marker, never rewind.
+        assert json.loads((state / "release.json").read_text())["system"] == candidate_identity["system"]
+        boot(state, automatic=True)
+        recovered = state.parent / (state.name + "-recovered")
+        subprocess.run([str(binary), "update", "--operation", "recover", "--state", str(state),
+                        "--destination", str(recovered), "--accept-data-loss"], check=True)
+        # These are disposable acceptance workloads with no external services.
+        # Never automatically do this for arbitrary real workloads.
+        marker = cold_marker  # Deliberate cold recovery excludes candidate writes.
+        boot(recovered, recovery_bundle=recovered / "recovery/bundle")
+        assert json.loads((recovered / "release.json").read_text()) == original_identity
+        assert (state / "data.img").exists(), "Recovery removed current candidate data"
+        print("PASS: distinct current-contract update/retry preserves candidate PVC writes, WorkloadPublication UID/spec/routing, login and CA; explicit cold recovery preserves originals", flush=True)
     if args.restore:
         archive = state.parent / (state.name+".age")
         restored = state.parent / (state.name+"-restored")

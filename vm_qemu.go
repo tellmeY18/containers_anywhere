@@ -7,15 +7,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -217,51 +213,4 @@ func newGuestCredentials() ([]byte, error) {
 
 func guestTLS(credentials []byte, server bool) (*tls.Config, error) {
 	return boottls.Config(credentials, server)
-}
-
-func verifyRuntime(dir string) error {
-	b, err := os.ReadFile(filepath.Join(dir, "runtime.json"))
-	if err != nil {
-		return err
-	}
-	var files map[string]string
-	if err = json.Unmarshal(b, &files); err != nil {
-		return err
-	}
-	name := "qemu-system-x86_64"
-	if runtime.GOARCH == "arm64" {
-		name = "qemu-system-aarch64"
-	}
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	if files[name] == "" {
-		return fmt.Errorf("QEMU runtime missing checksum: %s", name)
-	}
-	for name, want := range files {
-		if !filepath.IsLocal(name) || strings.Contains(name, "\\") {
-			return fmt.Errorf("invalid QEMU runtime filename")
-		}
-		info, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(name)))
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("QEMU runtime member must be regular")
-		}
-		f, err := os.Open(filepath.Join(dir, filepath.FromSlash(name)))
-		if err != nil {
-			return err
-		}
-		h := sha256.New()
-		_, err = io.Copy(h, f)
-		f.Close()
-		if err != nil {
-			return err
-		}
-		if hex.EncodeToString(h.Sum(nil)) != want {
-			return fmt.Errorf("QEMU checksum mismatch: %s", name)
-		}
-	}
-	return nil
 }
