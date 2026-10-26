@@ -8,8 +8,9 @@ installing Helm charts, applying YAML, inspecting resources, logs and terminals.
 The host needs no Docker, Kubernetes, Nix, Python or Node installation.
 
 An independent, application-agnostic project for running cloud-native workloads
-on consumer hardware. The current release is an **alpha**; mission-critical
-durability and disaster recovery are the next engineering milestones.
+on consumer hardware. The first independently versioned 0.1.0 app and appliance
+are **beta** releases, not production releases. Production go-live is planned for
+v1.0.0; see [release scope and trust](docs/RELEASES.md) for limitations.
 
 Until explicitly declared stable, development targets fresh 0.1.0 installs and
 current independent component contracts, not backward compatibility or alpha
@@ -18,7 +19,7 @@ automatically deleted.
 Robust current-design updates remain a 0.1.0 priority; app/appliance independence
 and normal-update data preservation are not excluded by that policy.
 
-[Download the alpha](https://github.com/tellmeY18/containers_anywhere/releases/tag/containers-v0.1.0-mvp.49)
+[Download the beta](https://github.com/tellmeY18/containers_anywhere/releases/tag/app-v0.1.0)
 · [Recovery architecture](docs/DISASTER_RECOVERY.md)
 · [Roadmap](ROADMAP.md)
 · [Appliance optimization](docs/APPLIANCE.md)
@@ -194,8 +195,10 @@ gh workflow run release.yml --ref develop -f build_run_id=<run-id>
 App versions come from `VERSION` and use `app-v<semver>`; appliance versions come
 from `APPLIANCE_VERSION` and use `appliance-v<semver>`. New app builds pin published
 component URLs and fixed hashes; app-only fixes never rebuild or replace the VM.
-See [release usage, trust and compatibility](docs/RELEASES.md). **This milestone
-does not complete the remaining 0.1.0 release gates or publish any assets.**
+See [release usage, trust and compatibility](docs/RELEASES.md). The 0.1.0 beta
+is published only after its required CI, published-dependency acceptance and
+release-asset checks pass. Physical platform acceptance remains incomplete; see
+the documented beta limitations.
 Initial appliance candidates use local-bundle acceptance until an independently
 approved component release exists. Alpha 49 remains published under its original
 `containers-v0.1.0-mvp.49` identity. Older launchers rely on GitHub's redirect from

@@ -5,12 +5,15 @@ The host app and appliance have separate SemVer identities: `app-v0.1.0` and
 appliance version. A version identifies one tested source/artifact set, never a
 mutable channel. These workflows do not publish automatically.
 
-The immediate target is the first fresh 0.1.0 release, **not authorization to
-publish from this integration PR**. Until the user explicitly declares stability,
-do not build or run legacy/alpha compatibility, migration matrices or old-release
-preservation drills. Existing data must still fail safely, without automatic
-deletion or migration. App/appliance independence applies to the current supported
-component contract, not an old-version support promise.
+The 0.1.0 releases are beta releases, published with ordinary SemVer tags and
+without GitHub's prerelease flag. They are not production-ready; production
+go-live is planned for v1.0.0. The user has explicitly authorized this first
+independent release sequence with the deferred capabilities and unverified
+platforms listed below. Until stability is explicitly declared, do not build or
+run legacy/alpha compatibility, migration matrices or old-release preservation
+drills. Existing data must still fail safely, without automatic deletion or
+migration. App/appliance independence applies to the current supported component
+contract, not an old-version support promise.
 
 Robust current-design update flow is necessary and a priority for 0.1.0, not
 optional backward-compatibility work. Installed-component selection and
@@ -21,10 +24,12 @@ v1.0.0, and backward compatibility starts only when the user declares stability.
 
 The integrated `develop` defaults provision Kite, not CNCM/CARE, and use an
 explicitly configured workload gateway. The `care-mvp` branch is untouched.
-Networking publication APIs are being developed separately. Native host
-supervision/resource/health handling, off-device recovery, journaled appliance
-updates and physical platform acceptance are not claimed by this PR; release
-scope decisions and evidence must be recorded before publication.
+The WorkloadPublication API manages Caddy/Traefik, mDNS and local CA or HTTP
+publication for authorized workload service accounts. Native host
+supervision/resource/health handling and scheduled off-device recovery are
+deferred. The 0.1.0 beta includes explicit operator-controlled appliance update
+transactions, with operational limits and platform acceptance gaps recorded in
+the release notes; it makes no production reliability, HA or PITR claim.
 
 ## App replacement versus appliance update
 
@@ -92,7 +97,8 @@ The WHPX machine/CPU configuration is replayed under KVM.
 
 Windows TCG boot acceptance remains disabled because it exceeds hosted-runner
 readiness limits. Windows WHPX, Linux ARM64 KVM and physical macOS boot acceptance
-are **not** established by packaging or compilation. Those are remaining gates.
+are **not** established by packaging or compilation. They remain unverified beta
+limitations, not evidence of platform acceptance or production readiness.
 
 ## Maintainer usage
 
@@ -112,38 +118,39 @@ gh workflow run app.yml --ref develop \
 gh workflow run app.yml --ref develop \
   -f appliance_tag=appliance-v0.1.1 -f runtime_tag=appliance-v0.1.0
 
-# Once authorized, promote successful build artifacts to a NEW draft:
+# After a successful build, promote its artifacts to a NEW draft:
 gh workflow run release.yml --ref develop -f build_run_id=<run-id>
 ```
 
 Until the first independent appliance release is published, app-only builds have
 no published dependency to resolve. Validate initial candidates using the appliance
-workflow's test-app packages and subsequent candidate-app reuse jobs. Do not manufacture a public 0.1.0 dependency or reuse
-an alpha tag to bypass the remaining release gates. An explicitly versioned
-prerelease can bootstrap this sequence only with separate publication approval.
+workflow's test-app packages and subsequent candidate-app reuse jobs. Do not
+manufacture a public 0.1.0 dependency or reuse an alpha tag to bypass published
+dependency acceptance.
 
 ## Ordered first-component publication and acceptance
 
-These are operator steps for a separately authorized release, not actions taken by
-this PR. There is no circular dependency: build/test the appliance with a candidate
-app first, publish the appliance, and only then build the public-dependent app.
+These are the authorized operator steps for the first independent beta release.
+There is no circular dependency: build/test the appliance with a candidate app
+first, publish the appliance, and only then build the public-dependent app.
 
 1. Integrate the reviewed source into `develop`, including the chosen networking
    scope. Set `VERSION` and `APPLIANCE_VERSION` independently to `0.1.0` and record
-   the exact commit. Confirm neither release tag exists. Complete the agreed
-   fresh-install and physical-platform gates or explicitly record unresolved
-   release blockers; do not claim acceptance from compile checks.
+   the exact commit. Confirm neither release tag exists. Run all required CI and
+   fresh-install acceptance gates. Record physical-platform and deferred-feature
+   limitations explicitly; compilation and packaging do not establish platform
+   boot acceptance.
 2. Dispatch `appliance.yml` on `develop`, record its run ID and `head_sha`, and
    require a successful first attempt including both guest derivations, four
    packages and the full candidate-app reuse pass. Retain the artifacts and logs.
    The run must contain the final intended source; a PR run cannot be promoted.
-3. When draft/tag preparation is authorized, dispatch `release.yml` with that
-   appliance build run ID. It creates **only** `appliance-v0.1.0`, targeting that
-   tested commit, with two appliance archives, three QEMU archives, their five
-   `.sha256` files and `appliance-release.json` (11 assets). Verify the draft's
-   source, hashes, version, protocol and exact asset set. Do not rebuild assets.
-4. With separate publication approval, publish the complete appliance draft
-   without making it the application's latest release:
+3. Dispatch `release.yml` with that appliance build run ID. It creates **only**
+   `appliance-v0.1.0`, targeting that tested commit, with two appliance archives,
+   three QEMU archives, their five `.sha256` files and `appliance-release.json`
+   (11 assets). Verify the draft's source, hashes, version, protocol and exact
+   asset set. Do not rebuild assets.
+4. Publish the complete appliance draft without making it the application's
+   latest release:
    `gh release edit appliance-v0.1.0 --repo tellmeY18/containers_anywhere --draft=false --latest=false`.
    Enable repository release immutability before publication where available.
    Once published, never move the tag or replace bytes.
@@ -164,21 +171,21 @@ app first, publish the appliance, and only then build the public-dependent app.
 7. Promote the successful first-attempt app run through `release.yml`. Inspect
    `app-v0.1.0`: four installers, four `.sha256` files and `app-release.json`
    (9 assets). Its dependency lock must match the accepted published release IDs,
-   source and hashes and must not contain `candidate`. Finish the agreed physical
-   installer/boot acceptance from these exact artifacts; packaging alone is not
-   that acceptance.
-8. Only with final publication approval, publish the complete app draft:
+   source and hashes and must not contain `candidate`. Packaging alone is not
+   physical installer/boot acceptance; list unverified platforms as beta
+   limitations rather than implying they passed.
+8. Publish the complete app draft:
    `gh release edit app-v0.1.0 --repo tellmeY18/containers_anywhere --draft=false --latest`.
    Download the public installers/checksums, compare them with `app-release.json`,
    and verify the public app's fresh-install path. Record both component IDs,
    commits, build/acceptance runs, runtime hashes and any platform limitations in
    the release notes. Announce the app release, not an appliance-only download.
 
-At present no independent component is published, so steps 4-8 cannot be evidenced
-without publication approval. Candidate CI is not a substitute for those steps.
-Failure after publication never permits clobbering an identity or deleting state;
-a corrected component needs a new version and fresh acceptance. If a draft/tag
-already exists after an interrupted promotion, follow the non-overwrite rule below.
+Candidate CI is not a substitute for actual published-dependency acceptance in
+steps 5-6. Failure after publication never permits clobbering an identity or
+deleting state; a corrected component needs a new version and fresh acceptance.
+If a draft/tag already exists after an interrupted promotion, follow the
+non-overwrite rule below.
 
 Promotion requires a successful first-attempt `workflow_dispatch` run on `develop`
 from `app.yml` or `appliance.yml`. PR builds, CARE builds, legacy alpha builds,
@@ -196,9 +203,38 @@ there is no standalone runtime publication workflow in this milestone.
 
 Promotion prepares a **draft only**. On interruption after tag creation, retain
 the partial draft/tag for inspection; do not rerun with overwrite or move the tag.
-Use a new version and a new successful build for another promotion. Before any
-separately approved publication, inspect the complete asset set and release
-evidence. Do not publish 0.1.0 while its remaining gates are open.
+Use a new version and a new successful build for another promotion. Before
+publication, inspect the complete asset set and release evidence. Publish 0.1.0
+only after all required CI and published-dependency acceptance gates pass;
+document the accepted beta scope and unresolved platform/deferred-feature
+limitations.
+
+## 0.1.0 beta scope and limitations
+
+The launcher GUI can prepare an update from the pinned appliance recommendation,
+activate or retry it, commit it, cancel it before execution, and report status.
+Selecting a trusted local candidate and exporting a recovery point are CLI-only.
+Once activated, workloads can immediately cause inbound or outbound side effects;
+there is no isolated validation environment or automatic disk rewind. Commit
+checks the appliance contract and requires the operator to attest that workloads
+and persistent volumes are consistent. Platform health does not validate
+application behavior.
+
+The update path supports only matching architecture and disk geometry,
+`var-lib-v1`, K3s/Kite versions, and the current workload-publication protocol.
+It does not migrate arbitrary K3s/Kite data. Recovery requires a stopped VM, an
+explicit data-loss acknowledgement, and an empty destination outside the original
+state directory. The original and failed disks are retained; recovery fences the
+source and starts no VM. There is no automatic rewind of the current disk.
+Update rollback points are unencrypted, local full logical-disk copies with no
+pruning, so they consume disk space and are not off-device backups or workload
+PITR. Manual encrypted cold backup and restore remain available.
+
+Native host service supervision, operational health checks and scheduled
+off-device recovery are deferred. Physical macOS boot, Windows WHPX, Linux ARM64
+KVM, power-loss behavior, and multi-device LAN/client CA trust have not been
+verified. The beta is a single-node local environment and makes no production
+reliability, high-availability or PITR promise.
 
 ## Trust
 
