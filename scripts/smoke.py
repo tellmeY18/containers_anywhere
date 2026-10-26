@@ -13,6 +13,8 @@ import time
 import urllib.error
 import urllib.request
 
+from publication_acceptance import publication_acceptance
+
 
 def request(url, token=None, data=None, opener=None):
     headers = {"Content-Type": "application/json"}
@@ -70,15 +72,15 @@ def main():
     binary, bundle, state = args.binary.resolve(), args.bundle.resolve(), args.state.resolve()
     state.mkdir()  # Never use existing user data.
     gateway_root = None
-    gateway_config = json.dumps({"port": 18443, "httpPort": 18080,
-                                "namespaces": ["default", "containers-demo"],
-                                "domains": ["default.localhost", "demo.local", "demo.localhost"]}).encode()
+    gateway_config = json.dumps({"port": 18443, "httpPort": 18080, "addresses": ["127.0.0.1"]}).encode()
     (state / "gateway.json").write_bytes(gateway_config)
     admin = {"username": "mvptest", "password": secrets.token_urlsafe(24), "enableAnalytics": False}
     marker = None
+    publication_identity = None
     timeout = int(os.environ.get("CONTAINERS_SMOKE_BOOT_SECONDS", "600"))
 
-    def boot(directory, fresh=False, replacement=False, update=False, automatic=False, recovery_bundle=None):
+    def boot(directory, fresh=False, replacement=False, update=False, automatic=False, recovery_bundle=None,
+             commit=True, write_update_marker=False):
         label = "fresh" if fresh else "restart"
         log = (directory / (label + "-smoke.log")).open("w")
         selected_binary = args.replacement_binary.resolve() if replacement else binary
@@ -103,7 +105,7 @@ def main():
             def ready():
                 status = json.loads(request(c["URL"]+"/control/status", c["Token"]))
                 assert status["protocol"] == 1
-                assert {"status", "logs", "stop", "kite-proxy"}.issubset(status["capabilities"])
+                assert {"status", "logs", "stop", "kite-proxy", "workload-publication-v1"}.issubset(status["capabilities"])
                 return status.get("healthy")
             wait_for(ready, process, timeout)
             try:
@@ -143,11 +145,7 @@ def main():
                 ]
                 for resource in resources:
                     request(c["AppURL"]+"/api/v1/resources/apply", data={"yaml": json.dumps(resource), "namespace": "default"}, opener=browser)
-                if args.gateway:
-                    ingress = {"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": {"name": "mvp-web", "namespace": "default"},
-                               "spec": {"ingressClassName": "containers-anywhere", "rules": [{"host": "app.default.localhost", "http": {"paths": [{"path": "/", "pathType": "Prefix", "backend": {"service": {"name": "mvp-web", "port": {"number": 8080}}}}]}}]}}
-                    request(c["AppURL"]+"/api/v1/resources/apply", data={"yaml": json.dumps(ingress), "namespace": "default"}, opener=browser)
-            assert (directory / "gateway.json").read_bytes() == gateway_config, "Saved gateway grants were overwritten"
+            assert (directory / "gateway.json").read_bytes() == gateway_config, "Listener settings were overwritten"
             nonlocal marker
             observed = wait_for(lambda: request(c["AppURL"]+"/api/v1/namespaces/default/services/mvp-web:8080/proxy/", opener=browser), process, timeout)
             if fresh:
@@ -155,6 +153,19 @@ def main():
             else:
                 assert observed == marker, "PVC contents changed after reboot/restore"
             if args.gateway:
+                if fresh:
+                    publication_acceptance(c["AppURL"], browser, request, wait_for, process,
+                                           directory / "gateway/caddy/pki/authorities/local/root.crt",
+                                           marker, timeout)
+                obj = wait_for(lambda: json.loads(request(
+                    c["AppURL"] + "/api/v1/workloadpublications.networking.containersanywhere.dev/default/mvp-web",
+                    opener=browser)), process, timeout)
+                observed_identity = (obj["metadata"]["uid"], obj["metadata"]["generation"], obj["spec"])
+                nonlocal publication_identity
+                if fresh:
+                    publication_identity = observed_identity
+                else:
+                    assert observed_identity == publication_identity, "WorkloadPublication identity/spec changed across update/retry/recovery"
                 wait_for(lambda: "https://app.default.localhost:18443" in json.loads(request(c["URL"]+"/control/gateway", c["Token"])).get("urls", []), process, timeout)
                 # curl uses --resolve so .localhost DNS support is not assumed.
                 # First contact triggers certificate issuance, without trusting it.
@@ -199,10 +210,22 @@ def main():
                     result = subprocess.run(base + ["--cacert", str(root), target.rstrip("/")+path], capture_output=True)
                     assert result.returncode != 0, "Workload gateway exposed appliance management"
                 print("PASS: Caddy trusted HTTPS, Traefik Ingress, management isolation and persistent CA", flush=True)
-            print("PASS: Kite auth, current protocol, generic workload/PVC and saved gateway grants", flush=True)
+            print("PASS: Kite auth, current protocol, generic workload/PVC and persistent listener settings", flush=True)
             if fresh and args.download:
                 print("PASS: actual public pinned appliance/runtime bootstrap into fresh state", flush=True)
-            if update:
+            if write_update_marker:
+                marker = (secrets.token_hex(24) + "\n").encode()
+                job = {"apiVersion": "batch/v1", "kind": "Job",
+                       "metadata": {"name": "update-write", "namespace": "default"},
+                       "spec": {"template": {"spec": {"restartPolicy": "Never", "containers": [
+                           {"name": "write", "image": "busybox:1.37.0",
+                            "command": ["sh", "-c", "printf '%s\\n' '" + marker.decode().strip() + "' > /data/index.html"],
+                            "volumeMounts": [{"name": "data", "mountPath": "/data"}]}],
+                           "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "mvp-data"}}]}}}}
+                request(c["AppURL"]+"/api/v1/resources/apply", data={"yaml": json.dumps(job), "namespace": "default"}, opener=browser)
+                wait_for(lambda: request(c["AppURL"]+"/api/v1/namespaces/default/services/mvp-web:8080/proxy/",
+                                         opener=browser) == marker, process, timeout)
+            if update and commit:
                 # Login above verifies the original administrator; the HTTP
                 # marker verifies real PVC data, not only launcher/K3s health.
                 subprocess.run([str(binary), "update", "--operation", "commit",
@@ -255,7 +278,10 @@ def main():
         subprocess.run([str(binary), "update", "--operation", "prepare", "--state", str(state),
                         "--bundle", str(candidate), "--original-bundle", str(bundle)], check=True)
         assert json.loads((state / "release.json").read_text()) == original_identity
-        boot(state, update=True)
+        cold_marker = marker
+        boot(state, update=True, commit=False, write_update_marker=True)
+        assert json.loads((state / "update.json").read_text())["phase"] == "candidate-running"
+        boot(state, update=True)  # Must retain the new marker, never rewind.
         assert json.loads((state / "release.json").read_text())["system"] == candidate_identity["system"]
         boot(state, automatic=True)
         recovered = state.parent / (state.name + "-recovered")
@@ -263,10 +289,11 @@ def main():
                         "--destination", str(recovered), "--accept-data-loss"], check=True)
         # These are disposable acceptance workloads with no external services.
         # Never automatically do this for arbitrary real workloads.
+        marker = cold_marker  # Deliberate cold recovery excludes candidate writes.
         boot(recovered, recovery_bundle=recovered / "recovery/bundle")
         assert json.loads((recovered / "release.json").read_text()) == original_identity
         assert (state / "data.img").exists(), "Recovery removed current candidate data"
-        print("PASS: distinct current-contract update, explicit commit, restart and separate old-generation recovery preserve PVC, login and CA", flush=True)
+        print("PASS: distinct current-contract update/retry preserves candidate PVC writes, WorkloadPublication UID/spec/routing, login and CA; explicit cold recovery preserves originals", flush=True)
     if args.restore:
         archive = state.parent / (state.name+".age")
         restored = state.parent / (state.name+"-restored")

@@ -43,19 +43,19 @@ to already-published alpha 49. No optional application profile/catalog is shippe
    app and appliance releases are independent.
 4. Once the cluster is ready, choose **Open Kite**, create an administrator and
    use the preconfigured `local` cluster. Fresh `develop` appliances do not install
-   CNCM or CARE. The gateway defaults to loopback-only 8080/8443 with only the
-   bundled diagnostic demo approved; publishing workloads to the LAN requires
-   explicit [gateway configuration](docs/NETWORKING.md).
+   CNCM or CARE. Workload listeners default to `0.0.0.0` on 80/443, with a
+   permission-driven 8080/8443 fallback. The bundled demo advertises on the LAN.
+   Authorized workload service accounts manage routing, local TLS and mDNS via
+   the [WorkloadPublication CRD](docs/NETWORKING.md), without host-panel grants.
 5. Install workloads through Kite's Helm management or YAML editor. HTTP GET
    access through Kite's Kube Proxy is available for simple service previews.
 
 Closing the browser keeps the VM running. Use **Stop cluster** or **Quit** in
 the control panel. Restart preserves your cluster, Kite account and local volumes.
-Changing defaults does not uninstall existing CNCM/CARE, delete their PVCs or
-secrets, or replace saved gateway grants. Existing data still requires its exact
-original appliance on ordinary startup. A separate, explicit
-[current-contract update operation](docs/UPDATES.md) can activate a verified
-candidate without silently replacing data.
+Existing data requires its exact selected appliance on ordinary startup. A separate,
+explicit [current-contract update operation](docs/UPDATES.md) can activate a verified
+candidate without silently replacing data. Incompatible publication configuration
+fails explicitly rather than being migrated or silently deleted.
 
 ### Platforms
 
@@ -68,6 +68,9 @@ candidate without silently replacing data.
 The MVP defaults to **2 vCPUs, 4 GiB guest RAM and a sparse 16 GiB data disk**.
 Plan for at least 8 GiB host RAM and 20 GiB free storage, with more for workloads
 and backups. These are defaults and capacity guidance, not measured minimums.
+The launcher no longer increases RAM automatically for CARE builds. Installations
+using implicit sizing should set `CONTAINERS_MEMORY_MIB=8192` before launch if
+their workloads require 8 GiB.
 Intel Macs, Windows ARM, mobile devices, GPU passthrough and non-Linux containers
 are not supported. Images must support the guest's native CPU architecture.
 
@@ -216,7 +219,7 @@ python3 scripts/package.py macos --arch arm64 --version 0.1.0 \
 ## MVP boundaries
 
 The source tree includes a native Caddy/Traefik gateway with a preloaded branded
-demo workload and opt-in host-side IPv4 mDNS for approved, responding `.local`
+demo workload and CRD-controlled host-side IPv4 mDNS for published, responding `.local`
 workloads, pending CI and real-platform acceptance. The panel distinguishes
 approved routes from responding endpoints and mDNS announcements; none proves
 remote firewall passage or client certificate trust.

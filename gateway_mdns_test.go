@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/tellmeY18/containers_anywhere/internal/publication"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
@@ -114,17 +115,20 @@ func TestWorkloadProbeVerifiesTLSAndDoesNotFollowRedirects(t *testing.T) {
 	roots.AddCert(server.Certificate())
 	for _, code := range []int{200, 204, 302, 401, 403, 404, 500, 502, 503} {
 		status.Store(int32(code))
-		err := probeWorkload(context.Background(), endpoint, host, roots)
+		cert, err := probeWorkload(context.Background(), endpoint, host, roots)
+		if !cert {
+			t.Fatal("valid certificate not reported independently of workload response")
+		}
 		if (err == nil) != (code < 400 || code == 401 || code == 403) {
 			t.Fatalf("HTTP %d: %v", code, err)
 		}
 	}
 	status.Store(200)
-	if err := probeWorkload(context.Background(), endpoint, host, x509.NewCertPool()); err == nil {
+	if _, err := probeWorkload(context.Background(), endpoint, host, x509.NewCertPool()); err == nil {
 		t.Fatal("accepted untrusted TLS")
 	}
 	endpoint.Host = "wrong.example.local"
-	if err := probeWorkload(context.Background(), endpoint, host, roots); err == nil {
+	if _, err := probeWorkload(context.Background(), endpoint, host, roots); err == nil {
 		t.Fatal("accepted wrong TLS hostname")
 	}
 }
@@ -141,6 +145,8 @@ func TestDiscoveryDistinguishesServingFromApprovalAndWithdraws(t *testing.T) {
 	n, _ := strconv.Atoi(port)
 	host := server.Certificate().DNSNames[0]
 	g := &gateway{state: t.TempDir(), config: gatewayConfig{Port: n}, hosts: []string{host}}
+	record := testPublication(host)
+	g.publications = []publication.Record{record}
 	ca := filepath.Join(g.state, "gateway/caddy/pki/authorities/local/root.crt")
 	if err := os.MkdirAll(filepath.Dir(ca), 0700); err != nil {
 		t.Fatal(err)
@@ -168,11 +174,13 @@ func TestDiscoveryDistinguishesServingFromApprovalAndWithdraws(t *testing.T) {
 		t.Fatal("failed endpoint advertisement was not closed")
 	}
 	g.hosts = nil
+	g.publications = nil
 	g.refreshDiscovery(context.Background())
 	if len(g.endpoints) != 0 {
 		t.Fatal("deleted approval still shown")
 	}
 	g.hosts = []string{host}
+	g.publications = []publication.Record{record}
 	code.Store(200)
 	g.refreshDiscovery(context.Background())
 	g.stopDiscovery()
@@ -182,7 +190,7 @@ func TestDiscoveryDistinguishesServingFromApprovalAndWithdraws(t *testing.T) {
 }
 
 func TestGatewayLANBindingsAreExplicit(t *testing.T) {
-	c := gatewayConfig{Port: 443, HTTPPort: 80, Addresses: []string{"127.0.0.1", "192.168.42.10"}, MDNS: true, Namespaces: []string{"example"}, Domains: []string{"example.local"}}
+	c := gatewayConfig{Port: 443, HTTPPort: 80, Addresses: []string{"127.0.0.1", "192.168.42.10"}}
 	if err := c.validate(); err != nil {
 		t.Fatal(err)
 	}

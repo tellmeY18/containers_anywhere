@@ -26,17 +26,22 @@ planned for v1.0.0; stability must be explicitly declared by the user.
   not CNCM/CARE. `care-mvp` remains unchanged.
 - Kite is the workload-management entry point; the 2-vCPU/4-GiB defaults have no
   application-specific memory heuristic or automatic application opening.
-- Fresh gateways are loopback-only with demo-only grants. Explicit namespace/
-  domain grants govern all workload Ingresses, including optional CNCM/CARE.
+- Workload listeners default to `0.0.0.0`, preferring 80/443 with permission-driven
+  8080/8443 fallback. Management stays private.
+- Namespaced WorkloadPublication CRDs are the publication authority; explicit
+  workload-SA RBAC grants route/TLS/mDNS control without host-panel grants.
+  Standard Ingress input is compiled into controller-only Traefik routes.
 - Workload HTTPS probes and mDNS distinguish approved routes, responding
   endpoints and announcements. DNS resolution is not remote reachability.
-- No existing workload deletion, secret/PVC reset, saved-config replacement or
-  appliance migration. Existing disks retain the exact-appliance requirement.
+- No workload deletion, secret/PVC reset or appliance migration. Existing disks
+  retain the exact-appliance requirement; alpha API compatibility is not a goal.
 
-Gate: fresh-install namespace checks; current gateway settings, generic
-workload/PVC and Kite identity through reboot and encrypted restore.
-Physical multi-device mDNS/firewall/trust tests
-remain required. No Gateway API or publication CRD/controller is shipped.
+Gate: workload-SA create/update/delete, RBAC/admission rejection, hostname conflicts,
+namespace isolation, reserved targets, TLS/status transitions and restart
+convergence; generic workload/PVC, Kite identity and CA through reboot and
+encrypted restore. The KVM smoke includes these checks; passing evidence is
+required before release. Physical multi-device mDNS/firewall/trust tests remain
+required. This CRD contract does not implement Gateway API.
 
 ## R1 — Prove and inspect recovery points
 

@@ -93,3 +93,29 @@ spec:
                 name: demo
                 port:
                   number: 80
+---
+apiVersion: networking.containersanywhere.dev/v1alpha1
+kind: WorkloadPublication
+metadata:
+  name: demo
+  namespace: containers-demo
+spec:
+  ingressRef: demo
+  hostname: demo.local
+  lan: true
+  mdns: true
+  tls:
+    mode: HTTP
+---
+apiVersion: networking.containersanywhere.dev/v1alpha1
+kind: WorkloadPublication
+metadata:
+  name: demo-localhost
+  namespace: containers-demo
+spec:
+  ingressRef: demo
+  hostname: demo.localhost
+  lan: false
+  mdns: false
+  tls:
+    mode: HTTP

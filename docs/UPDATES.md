@@ -126,8 +126,10 @@ fencing. Existing downloader tests cover partial transfers and checksum failures
 The CI KVM drill builds a second **distinct NixOS root image**, with unchanged
 K3s/Kite/data contracts, not an alpha fixture or merely edited version string.
 It creates a real PVC-backed workload and administrator, updates, validates marker/
-login/CA continuity, explicitly commits, restarts, exports the old generation and
-boots that disposable recovery. The normal KVM smoke also runs encrypted backup/
+login/CA continuity and WorkloadPublication UID/generation/spec/routing, writes a
+new PVC marker during uncommitted candidate execution, retries without rewinding
+that marker, explicitly commits, restarts, exports the old generation and boots
+that disposable recovery using its retained launcher. The normal KVM smoke also runs encrypted backup/
 restore. These are disposable workloads without external business side effects;
 they do not justify automatic recovery of arbitrary workloads.
 

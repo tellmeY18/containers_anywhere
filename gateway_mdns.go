@@ -375,7 +375,7 @@ func (a *demoAdvertiser) Close() {
 
 func (g *gateway) refreshDiscovery(ctx context.Context) {
 	g.mu.RLock()
-	hosts := slices.Clone(g.hosts)
+	records := slices.Clone(g.publications)
 	processError := g.childError
 	g.mu.RUnlock()
 	allowed := g.config.Addresses
@@ -384,7 +384,11 @@ func (g *gateway) refreshDiscovery(ctx context.Context) {
 	}
 	var links []demoLink
 	var discoveryErr error
-	if g.config.MDNS {
+	wantsMDNS := false
+	for _, record := range records {
+		wantsMDNS = wantsMDNS || record.MDNS
+	}
+	if wantsMDNS {
 		links, discoveryErr = demoLinks(allowed)
 		if discoveryErr == nil && len(links) == 0 {
 			discoveryErr = errors.New("no configured LAN interface is available")
@@ -408,11 +412,8 @@ func (g *gateway) refreshDiscovery(ctx context.Context) {
 	defer cancel()
 	var endpoints []gatewayEndpoint
 	var advertised []mdnsEndpoint
-	for _, host := range hosts {
-		endpoint := mdnsEndpoint{Host: host, Port: uint16(g.config.Port)}
-		if (host == "demo.local" || host == "demo.localhost") && g.config.HTTPPort != 0 {
-			endpoint.HTTP, endpoint.Port = true, uint16(g.config.HTTPPort)
-		}
+	for _, record := range records {
+		endpoint := g.endpoint(record)
 		status := gatewayEndpoint{URL: endpoint.url()}
 		var err error
 		switch {
@@ -421,8 +422,13 @@ func (g *gateway) refreshDiscovery(ctx context.Context) {
 		case !endpoint.HTTP && caErr != nil:
 			err = fmt.Errorf("gateway CA unavailable: %w", caErr)
 		default:
-			for _, address := range addresses {
-				if err = probeWorkload(probeCtx, endpoint, address, roots); err != nil {
+			probeAddresses := addresses
+			if !record.LAN {
+				probeAddresses = []string{"127.0.0.1"}
+			}
+			for _, address := range probeAddresses {
+				status.CertificateReady, err = probeWorkload(probeCtx, endpoint, address, roots)
+				if err != nil {
 					break
 				}
 			}
@@ -430,7 +436,7 @@ func (g *gateway) refreshDiscovery(ctx context.Context) {
 		status.Ready = err == nil
 		if err != nil {
 			status.Error = err.Error()
-		} else if g.config.MDNS && strings.HasSuffix(host, ".local") {
+		} else if record.MDNS && record.LAN {
 			advertised = append(advertised, endpoint)
 		}
 		endpoints = append(endpoints, status)
@@ -486,7 +492,7 @@ func (e mdnsEndpoint) url() string {
 	return fmt.Sprintf("%s://%s:%d/", scheme, e.Host, e.Port)
 }
 
-func probeWorkload(ctx context.Context, endpoint mdnsEndpoint, address string, roots *x509.CertPool) error {
+func probeWorkload(ctx context.Context, endpoint mdnsEndpoint, address string, roots *x509.CertPool) (bool, error) {
 	transport := &http.Transport{
 		Proxy:           nil,
 		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots},
@@ -498,22 +504,23 @@ func probeWorkload(ctx context.Context, endpoint mdnsEndpoint, address string, r
 	client := &http.Client{Transport: transport, Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.url(), nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("workload probe on %s: %w", address, err)
+		return false, fmt.Errorf("workload probe on %s: %w", address, err)
 	}
 	defer resp.Body.Close()
-	if endpoint.HTTP {
+	certificateReady := resp.TLS != nil && len(resp.TLS.VerifiedChains) > 0
+	if endpoint.HTTP && (endpoint.Host == "demo.local" || endpoint.Host == "demo.localhost") {
 		body, err := io.ReadAll(io.LimitReader(resp.Body, 32768))
 		if err != nil || resp.StatusCode != 200 || !strings.Contains(string(body), "Containers Anywhere works.") {
-			return fmt.Errorf("demo not serving on %s (HTTP %d)", address, resp.StatusCode)
+			return certificateReady, fmt.Errorf("demo not serving on %s (HTTP %d)", address, resp.StatusCode)
 		}
 	} else if !(resp.StatusCode >= 200 && resp.StatusCode < 400 || resp.StatusCode == 401 || resp.StatusCode == 403) {
-		return fmt.Errorf("workload root not serving on %s (HTTP %d)", address, resp.StatusCode)
+		return certificateReady, fmt.Errorf("workload root not serving on %s (HTTP %d)", address, resp.StatusCode)
 	}
-	return nil
+	return certificateReady, nil
 }
 
 func (g *gateway) stopDiscovery() {
