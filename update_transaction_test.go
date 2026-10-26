@@ -529,6 +529,21 @@ func TestUpdateJournalCorruptionFailsClosed(t *testing.T) {
 	}
 }
 
+func TestRecoveryDestinationContainment(t *testing.T) {
+	root := t.TempDir()
+	if outsideUpdateState(root, root) || outsideUpdateState(root, filepath.Join(root, "nested")) {
+		t.Fatal("accepted source or nested recovery directory")
+	}
+	if !outsideUpdateState(root, filepath.Join(filepath.Dir(root), "separate")) {
+		t.Fatal("rejected separate recovery directory")
+	}
+	if runtime.GOOS == "windows" {
+		if !outsideUpdateState(`C:\cluster`, `D:\recovery`) || outsideUpdateState(`C:\cluster`, `c:\cluster\nested`) {
+			t.Fatal("incorrect cross-volume or case-insensitive containment")
+		}
+	}
+}
+
 func TestRecoveryDoesNotOverwriteDestination(t *testing.T) {
 	state, old, next := updateFixture(t)
 	if err := prepareUpdate(state, next, old, updateHooks{}); err != nil {

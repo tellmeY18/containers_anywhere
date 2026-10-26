@@ -777,6 +777,14 @@ func cancelUpdate(state string, h updateHooks) error {
 	return nil
 }
 
+func outsideUpdateState(source, destination string) bool {
+	if volume := filepath.VolumeName(source); volume != "" && !strings.EqualFold(volume, filepath.VolumeName(destination)) {
+		return true
+	}
+	rel, err := filepath.Rel(source, destination)
+	return err == nil && (rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
 func recoverUpdate(state, destination string, h updateHooks) error {
 	if destination == "" {
 		return errors.New("--destination must name a new, empty directory outside cluster state")
@@ -794,8 +802,7 @@ func recoverUpdate(state, destination string, h updateHooks) error {
 	if err != nil {
 		return err
 	}
-	rel, err := filepath.Rel(source, dest)
-	if err != nil || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+	if !outsideUpdateState(source, dest) {
 		return errors.New("recovery destination must be outside cluster state")
 	}
 	j, err := readUpdate(state)
