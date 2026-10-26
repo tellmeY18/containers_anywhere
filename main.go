@@ -252,6 +252,14 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 	if !compatibleData(release, m) {
 		return errors.New("cluster data does not match the selected appliance; reset required: choose a new empty state directory (existing data is unchanged)")
 	}
+	if runtime.GOOS != "darwin" {
+		if err := verifyRuntime(m.hostRuntime); err != nil {
+			return err
+		}
+		if err := saveJSON(filepath.Join(state, "runtime-selection.json"), selectedRuntime{bundleID(m), m.hostRuntime}); err != nil {
+			return err
+		}
+	}
 	_ = saveJSON(filepath.Join(state, "progress.json"), "Starting K3s and Kite…")
 	vm, err := launchVM(bundle, state, m)
 	if err != nil {

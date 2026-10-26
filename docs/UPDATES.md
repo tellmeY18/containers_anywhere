@@ -59,6 +59,11 @@ preflight budgets full logical disk size plus all artifacts and a 256 MiB reserv
 the source sparse disk does not imply a cheap recovery copy. Recovery contents are
 hashed and checked before activation/export. The preparing launcher is the current
 supported app, not a reconstructed historical launcher.
+QEMU is retained from the recorded runtime used for the selected appliance, not
+a stale sibling after an independent app/runtime patch. Explicit local bundles
+without a runtime receipt use their verified sibling runtime.
+Damage to the separate candidate does not invalidate the original recovery point;
+activation still verifies the candidate, and corrupted candidate evidence is retained.
 
 **This unencrypted local recovery point shares the host failure domain.** It is
 not off-device protection or workload PITR. Keep normal encrypted off-device
@@ -78,6 +83,7 @@ Each operation has a unique `updates/transaction-*` directory.
 | `candidate-running` | Persisted **before** VM boot. Candidate is selected; the current disk may contain candidate writes even without a health response. Explicit retry uses that same disk; commit requires a live candidate and validation. |
 | `committed` | Ordinary launch selects the verified retained candidate. All recovery material remains. |
 | `cancelled` | Only reachable before activation. Original identity/disk remain selected; evidence is retained. |
+| `snapshot` | Gate inside retained cold state prevents accidentally booting and modifying the recovery point itself. Use the explicit export operation. |
 | `exporting` | Gate on a partial recovery destination. It cannot be cancelled into a bootable state. Preserve it and retry into another new directory. |
 | `recovery-exported` | Source remains blocked with current/failed disk untouched; separate cold copy exported. No VM is automatically started. |
 

@@ -90,6 +90,13 @@ func TestUpdatePrepareEveryDurableBoundary(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
+	j, err := readUpdate(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkUpdateStart(filepath.Join(updateRoot(state, j), "state")) == nil {
+		t.Fatal("cold recovery point could be booted and modified in place")
+	}
 	for index, boundary := range boundaries {
 		t.Run(boundary, func(t *testing.T) {
 			state, old, next := updateFixture(t)
@@ -287,6 +294,69 @@ func TestUpdateResumeAndRecoveryIntegrity(t *testing.T) {
 		t.Fatal("activated without a viable recovery point")
 	}
 	requireUnchanged(t, state, old)
+}
+
+func TestRecoveryRetainsRecordedRuntimeInsteadOfStaleSibling(t *testing.T) {
+	state, old, next := updateFixture(t)
+	m, _ := readManifest(filepath.Join(old, "manifest.json"))
+	dir := t.TempDir()
+	name := "qemu-system-x86_64"
+	if runtime.GOARCH == "arm64" {
+		name = "qemu-system-aarch64"
+	}
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	data := []byte("independently updated app runtime")
+	if err := os.WriteFile(filepath.Join(dir, name), data, 0700); err != nil {
+		t.Fatal(err)
+	}
+	mustSave(t, filepath.Join(dir, "runtime.json"), map[string]string{name: sha256Text(data)})
+	mustSave(t, filepath.Join(state, "runtime-selection.json"), selectedRuntime{bundleID(m), dir})
+	if selected, err := recoveryRuntime(state, old, m); err != nil || selected != dir {
+		t.Fatal("did not retain recorded runtime", selected, err)
+	}
+	if runtime.GOOS != "darwin" {
+		if err := prepareUpdate(state, next, old, updateHooks{}); err != nil {
+			t.Fatal(err)
+		}
+		j, _ := readUpdate(state)
+		if !fileHashMatches(filepath.Join(updateRoot(state, j), "original/qemu", name), sha256Text(data)) {
+			t.Fatal("recovery retained stale sibling runtime")
+		}
+	}
+	mustSave(t, filepath.Join(state, "runtime-selection.json"), selectedRuntime{"unrelated-appliance", dir})
+	if _, err := recoveryRuntime(state, old, m); err == nil {
+		t.Fatal("mismatched runtime receipt silently ignored")
+	}
+}
+
+func TestDamagedCandidateDoesNotInvalidateOriginalRecovery(t *testing.T) {
+	state, old, next := updateFixture(t)
+	if err := prepareUpdate(state, next, old, updateHooks{}); err != nil {
+		t.Fatal(err)
+	}
+	j, err := readUpdate(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	damaged := filepath.Join(updateRoot(state, j), "candidate", "system.img")
+	if err := os.WriteFile(damaged, []byte("damaged candidate evidence"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publishUpdate(state, updateHooks{}); err == nil {
+		t.Fatal("activated corrupt candidate")
+	}
+	requireUnchanged(t, state, old)
+	dest := filepath.Join(t.TempDir(), "recovered")
+	if err := recoverUpdate(state, dest, updateHooks{}); err != nil {
+		t.Fatal("candidate corruption blocked original recovery", err)
+	}
+	requireUnchanged(t, dest, old)
+	b, _ := os.ReadFile(damaged)
+	if string(b) != "damaged candidate evidence" {
+		t.Fatal("failed candidate evidence removed")
+	}
 }
 
 func TestUpdatePreparationResumesPinnedDownload(t *testing.T) {

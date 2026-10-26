@@ -42,6 +42,38 @@ type updatePoint struct {
 	Files map[string]recoveryFile `json:"files"`
 }
 
+type selectedRuntime struct {
+	BundleID  string `json:"bundle_id"`
+	Directory string `json:"directory"`
+}
+
+func recoveryRuntime(state, original string, m manifest) (string, error) {
+	raw, err := os.ReadFile(filepath.Join(state, "runtime-selection.json"))
+	if err == nil {
+		var selected selectedRuntime
+		if json.Unmarshal(raw, &selected) != nil || selected.BundleID != bundleID(m) || !filepath.IsAbs(selected.Directory) {
+			return "", errors.New("recorded runtime does not match selected appliance; preserve state and inspect runtime-selection.json")
+		}
+		return selected.Directory, verifyRuntime(selected.Directory)
+	}
+	if !os.IsNotExist(err) {
+		return "", err
+	}
+	for _, dir := range []string{
+		filepath.Join(filepath.Dir(original), "qemu"),
+		filepath.Join(filepath.Dir(original), "original", "qemu"),
+		filepath.Join(runtimeCache(state), "qemu"),
+	} {
+		if _, err := os.Lstat(dir); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return "", err
+		}
+		return dir, verifyRuntime(dir)
+	}
+	return "", errors.New("selected runtime is unavailable; retain verified QEMU beside the original bundle")
+}
+
 type updateHooks struct {
 	// Tests interrupt after each durable boundary, including metadata publication.
 	boundary func(string) error
@@ -72,7 +104,7 @@ func readUpdate(state string) (updateJournal, error) {
 		return j, errors.New("invalid update journal identity; preserve state for operator recovery")
 	}
 	switch j.Phase {
-	case "preparing", "prepared", "activating", "candidate-running", "committed", "cancelled", "recovery-exported", "exporting":
+	case "preparing", "prepared", "activating", "candidate-running", "committed", "cancelled", "recovery-exported", "exporting", "snapshot":
 	default:
 		return j, errors.New("unknown update phase; preserve state for operator recovery")
 	}
@@ -295,6 +327,17 @@ func prepareUpdate(state, candidate, original string, h updateHooks) error {
 	if err := writeUpdate(state, &j, "preparing", h); err != nil {
 		return err
 	}
+	snapshot := j
+	snapshot.Phase = "snapshot"
+	if err := saveJSON(filepath.Join(root, "state", "update.json"), snapshot); err != nil {
+		return err
+	}
+	if err := atomicfile.SyncDir(root); err != nil {
+		return err
+	}
+	if err := h.reached("snapshot-fenced"); err != nil {
+		return err
+	}
 	sources := map[string]string{}
 	names, err := backupMembers(state)
 	if err != nil {
@@ -324,18 +367,12 @@ func prepareUpdate(state, candidate, original string, h updateHooks) error {
 		sources["original/"+name] = helper
 	}
 	if runtime.GOOS != "darwin" {
-		qemu := filepath.Join(filepath.Dir(original), "qemu")
-		if _, err := os.Stat(qemu); os.IsNotExist(err) {
-			qemu = filepath.Join(filepath.Dir(original), "original", "qemu")
-			if _, err := os.Stat(qemu); os.IsNotExist(err) {
-				qemu = filepath.Join(runtimeCache(state), "qemu")
-			}
+		qemu, err := recoveryRuntime(state, original, old)
+		if err != nil {
+			return err
 		}
 		if err := addUpdateTree(sources, "original/qemu", qemu); err != nil {
 			return fmt.Errorf("retain the current verified runtime beside the original bundle: %w", err)
-		}
-		if err := verifyRuntime(qemu); err != nil {
-			return err
 		}
 	}
 	if err := updateCapacity(root, sources, h); err != nil {
@@ -526,13 +563,25 @@ func verifyUpdatePoint(state string, j updateJournal) (updatePoint, error) {
 	if err := json.Unmarshal(raw, &point); err != nil {
 		return point, err
 	}
-	for _, required := range []string{"state/data.img", "state/release.json", "original/" + recoveryLauncherName(), "original/bundle/manifest.json", "candidate/manifest.json"} {
+	gate, err := readUpdate(filepath.Join(root, "state"))
+	if err != nil || gate.Phase != "snapshot" || gate.ID != j.ID || !compatibleData(gate.Original, j.Original) {
+		return point, errors.New("cold recovery point launch gate is missing or inconsistent")
+	}
+	for _, required := range []string{"state/data.img", "state/release.json", "original/" + recoveryLauncherName(), "original/bundle/manifest.json"} {
 		if _, ok := point.Files[required]; !ok {
 			return point, errors.New("incomplete update recovery point")
 		}
 	}
 	for name, file := range point.Files {
-		if !validUpdatePath(name) || !fileHashMatches(filepath.Join(root, filepath.FromSlash(name)), file.SHA256) {
+		if !validUpdatePath(name) {
+			return point, errors.New("invalid recovery member path")
+		}
+		// Candidate damage must not make the independent original recovery
+		// unusable. Activation separately verifies the complete candidate.
+		if strings.HasPrefix(name, "candidate/") {
+			continue
+		}
+		if !fileHashMatches(filepath.Join(root, filepath.FromSlash(name)), file.SHA256) {
 			return point, fmt.Errorf("update recovery integrity failure: %s; preserve all copies", name)
 		}
 	}
@@ -793,12 +842,12 @@ func recoverUpdate(state, destination string, h updateHooks) error {
 		if err := retainUpdateFile(sources[name], filepath.Join(dest, filepath.FromSlash(name))); err != nil {
 			return err
 		}
-		if err := syncUpdateDirectories(dest); err != nil {
-			return err
-		}
 		if err := h.reached("exported:" + name); err != nil {
 			return err
 		}
+	}
+	if err := syncUpdateDirectories(dest); err != nil {
+		return err
 	}
 	j.Recovery = dest
 	if err := writeUpdate(state, &j, "recovery-exported", h); err != nil {
