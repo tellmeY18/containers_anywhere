@@ -2,7 +2,6 @@ package main
 
 import (
 	"archive/tar"
-	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -42,46 +41,87 @@ func bootstrap(state string, progress func(string)) (string, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return "", err
 	}
-	if err := validDownload(applianceURL, applianceSHA256); err != nil {
-		return "", fmt.Errorf("launcher has no valid pinned appliance: %w; use a packaged release or --bundle", err)
-	}
 	client := newDownloadClient()
-	// A gzip archive is not reproducible, so each release yields a different
-	// archive hash even when the appliance is byte-identical. Reuse is therefore
-	// keyed on content identity: the manifest carries a SHA-256 for every member,
-	// so a cached bundle with an identical manifest provably is the same appliance
-	// and needs no download at all.
-	if want, err := remoteManifest(client, applianceURL); err == nil && validateLayers(want) == nil && want.Arch == runtime.GOARCH {
+	address, digest := applianceURL, applianceSHA256
+	want, err := readManifest(filepath.Join(state, "release.json"))
+	existing := err == nil
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("read installed appliance identity: %w", err)
+	}
+	if _, diskErr := os.Stat(filepath.Join(state, "data.img")); diskErr == nil && !existing {
+		return "", errors.New("cluster disk has no appliance identity; restore a backup, not a new appliance")
+	} else if diskErr != nil && !os.IsNotExist(diskErr) {
+		return "", diskErr
+	}
+	if existing {
+		if err := validateLayers(want); err != nil || want.Arch != runtime.GOARCH {
+			return "", errors.New("installed appliance is incompatible with this launcher or host; retain the original launcher and appliance")
+		}
 		if dir, ok := cachedBundle(root, want); ok {
-			progress("Reusing the appliance already verified on this computer.")
+			progress("Retaining the exact appliance selected by this cluster.")
 			if runtime.GOOS != "darwin" {
-				if err := ensureRuntime(client, filepath.Dir(dir), progress); err != nil {
+				if err := ensureRuntime(client, runtimeCache(state), progress); err != nil {
 					return "", err
 				}
 			}
 			return dir, nil
 		}
+		var selected applianceSelection
+		raw, err := os.ReadFile(filepath.Join(state, "appliance.json"))
+		if err != nil {
+			return "", fmt.Errorf("original appliance is not cached; use --bundle with the exact original appliance: %w", err)
+		}
+		if err := json.Unmarshal(raw, &selected); err != nil || selected.BundleID != bundleID(want) {
+			return "", errors.New("saved appliance download does not match cluster identity; use the exact original --bundle")
+		}
+		address, digest = selected.URL, selected.SHA256
 	}
-	dest := filepath.Join(root, applianceSHA256)
+	if err := validDownload(address, digest); err != nil {
+		return "", fmt.Errorf("no valid pinned appliance: %w; use a packaged release or the exact original --bundle", err)
+	}
+	dest := filepath.Join(root, digest)
 	if err := os.MkdirAll(dest, 0700); err != nil {
 		return "", err
 	}
-	if err := installArchive(client, applianceURL, applianceSHA256, filepath.Join(dest, "bundle"), progress); err != nil {
+	if err := installArchive(client, address, digest, filepath.Join(dest, "bundle"), progress); err != nil {
+		return "", err
+	}
+	m, err := verifyBundle(filepath.Join(dest, "bundle"))
+	if err != nil {
+		return "", err
+	}
+	if existing && !compatibleData(want, m) {
+		return "", errors.New("downloaded appliance does not match the existing cluster; refusing replacement")
+	}
+	if err := saveJSON(filepath.Join(state, "appliance.json"), applianceSelection{address, digest, bundleID(m)}); err != nil {
 		return "", err
 	}
 	if runtime.GOOS != "darwin" {
-		if err := ensureRuntime(client, dest, progress); err != nil {
+		if err := ensureRuntime(client, runtimeCache(state), progress); err != nil {
 			return "", err
 		}
 	}
 	return filepath.Join(dest, "bundle"), nil
 }
 
-// ensureRuntime installs QEMU beside the bundle (<applianceDir>/qemu), which is
-// where the VM launcher resolves it from.
+type applianceSelection struct {
+	URL      string `json:"url"`
+	SHA256   string `json:"sha256"`
+	BundleID string `json:"bundle_id"`
+}
+
+func runtimeCache(state string) string {
+	return filepath.Join(state, "runtimes", runtimeSHA256)
+}
+
+// Packaged runtimes are independently content-addressed. Explicit local bundles
+// retain the historical sibling qemu/ convention.
 func ensureRuntime(client *http.Client, applianceDir string, progress func(string)) error {
 	if err := validDownload(runtimeURL, runtimeSHA256); err != nil {
 		return fmt.Errorf("launcher has no valid pinned QEMU runtime: %w; use a packaged release", err)
+	}
+	if err := os.MkdirAll(applianceDir, 0700); err != nil {
+		return err
 	}
 	return installArchive(client, runtimeURL, runtimeSHA256, filepath.Join(applianceDir, "qemu"), progress)
 }
@@ -108,56 +148,6 @@ func cachedBundle(root string, want manifest) (string, bool) {
 		return dir, true
 	}
 	return "", false
-}
-
-const prefixWindow = 64 << 10
-
-// remoteManifest reads only the leading bytes of the pinned archive to recover
-// its manifest member. Any unexpected result falls back to a full download, so a
-// server without ranged reads costs nothing but bandwidth.
-func remoteManifest(client *http.Client, address string) (manifest, error) {
-	var m manifest
-	req, err := http.NewRequest("GET", address, nil)
-	if err != nil {
-		return m, err
-	}
-	req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", prefixWindow-1))
-	req.Header.Set("Accept-Encoding", "identity")
-	resp, err := client.Do(req)
-	if err != nil {
-		return m, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusPartialContent {
-		return m, errors.New("server does not support ranged reads")
-	}
-	window, err := io.ReadAll(io.LimitReader(resp.Body, prefixWindow+1))
-	if err != nil {
-		return m, err
-	}
-	if len(window) > prefixWindow {
-		window = window[:prefixWindow]
-	}
-	gz, err := gzip.NewReader(bytes.NewReader(window))
-	if err != nil {
-		return m, err
-	}
-	defer gz.Close()
-	tr := tar.NewReader(gz)
-	for {
-		header, err := tr.Next()
-		if err != nil {
-			return m, err
-		}
-		if header.Name != "manifest.json" {
-			continue
-		}
-		raw, err := io.ReadAll(io.LimitReader(tr, 1<<20))
-		if err != nil {
-			return m, err
-		}
-		return m, json.Unmarshal(raw, &m)
-	}
 }
 
 func validDownload(address, digest string) error {

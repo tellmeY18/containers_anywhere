@@ -2,15 +2,20 @@
 let
   agent = pkgs.buildGoModule {
     pname = "containers-anywhere-agent";
-    version = "0.1.0";
+    version = lib.removeSuffix "\n" (builtins.readFile ../APPLIANCE_VERSION);
     src = lib.fileset.toSource {
       root = ../.;
       fileset = lib.fileset.unions [
-        (lib.fileset.fileFilter (file: file.hasExt "go") ../.)
+        ../cmd/guest
+        ../internal/guest
+        ../internal/boottls
+        ../internal/protocol
+        ../internal/atomicfile
         ../go.mod
         ../go.sum
       ];
     };
+    subPackages = [ "cmd/guest" ];
     vendorHash = "sha256-LnhRtNunYUntDnrP9g7POtGablJbcrkK5eY2AOCcIfM=";
     env.CGO_ENABLED = "0";
     ldflags = [ "-s" "-w" ];
@@ -107,7 +112,7 @@ in
       Type = "oneshot";
       RemainAfterExit = true;
       UMask = "0077";
-      ExecStart = "${agent}/bin/containers_anywhere guest init-kite";
+      ExecStart = "${agent}/bin/guest guest init-kite";
     };
   };
   # A reconnecting local tunnel avoids NodePort/hostNetwork exposure and survives
@@ -130,7 +135,7 @@ in
     wantedBy = [ "multi-user.target" ];
     after = [ "local-fs.target" ];
     path = [ pkgs.systemd config.services.k3s.package ];
-    serviceConfig = { ExecStart = "${agent}/bin/containers_anywhere guest"; Restart = "on-failure"; };
+    serviceConfig = { ExecStart = "${agent}/bin/guest guest"; Restart = "on-failure"; };
   };
   services.fstrim.enable = true;
 }

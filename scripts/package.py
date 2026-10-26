@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """Package a small launcher with build-pinned downloads; no VM in the installer."""
 import argparse
-import hashlib
 import os
 from pathlib import Path
 import plistlib
-import re
 import shutil
 import subprocess
 import tarfile
@@ -13,17 +11,13 @@ from urllib.parse import urlparse
 
 from runtime import stage_runtime, download
 from caddy import stage_caddy
+from components import digest, semver
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
 def run(*args, **kwargs):
     subprocess.run(args, check=True, **kwargs)
-
-
-def digest(path):
-    with path.open("rb") as f:
-        return hashlib.file_digest(f, "sha256").hexdigest()
 
 
 def checksum(path):
@@ -44,29 +38,36 @@ def main():
     parser.add_argument("platform", choices=["macos", "linux", "windows"])
     parser.add_argument("--appliance", type=Path, required=True, help="exact appliance archive to pin")
     parser.add_argument("--arch", choices=["arm64", "amd64"], required=True)
-    parser.add_argument("--base-url", required=True, help="immutable HTTPS release asset directory")
+    parser.add_argument("--base-url", required=True, help="immutable appliance release asset directory")
+    parser.add_argument("--runtime", type=Path, help="reuse an already verified QEMU archive instead of building one")
+    parser.add_argument("--runtime-base-url", help="independent immutable runtime release directory")
     parser.add_argument("--version", required=True)
     parser.add_argument("--output", type=Path, default=ROOT / "dist/releases")
     args = parser.parse_args()
-    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-mvp\.[1-9][0-9]*", args.version):
-        raise ValueError("Expected immutable version, e.g. 0.1.0-mvp.1")
-    url = urlparse(args.base_url)
-    if url.scheme != "https" or not url.netloc or url.username or url.query or url.fragment or any(c.isspace() for c in args.base_url):
-        raise ValueError("Expected an HTTPS release directory without credentials, query or spaces")
+    semver(args.version)
+    for address in [args.base_url, args.runtime_base_url or args.base_url]:
+        url = urlparse(address)
+        if url.scheme != "https" or not url.netloc or url.username or url.query or url.fragment or any(c.isspace() for c in address):
+            raise ValueError("Expected an HTTPS release directory without credentials, query or spaces")
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
     stage = out / f"stage-{args.platform}-{args.arch}"
     stage.mkdir()
-    flags = ["-s", "-w", "-X", f"main.applianceURL={args.base_url.rstrip('/')}/appliance-{args.arch}.tar.gz",
+    flags = ["-s", "-w", "-X", f"main.appVersion={args.version}",
+             "-X", f"main.applianceURL={args.base_url.rstrip('/')}/appliance-{args.arch}.tar.gz",
              "-X", f"main.applianceSHA256={digest(args.appliance)}"]
     if args.platform != "macos":
-        runtime_dir = stage / "qemu"
-        stage_runtime(runtime_dir, args.arch)
-        runtime_archive = out / f"runtime-{args.platform}-{args.arch}.tar.gz"
-        pack(runtime_dir, runtime_archive)
-        flags += ["-X", f"main.runtimeURL={args.base_url.rstrip('/')}/{runtime_archive.name}",
+        runtime_archive = args.runtime
+        if runtime_archive is None:
+            runtime_dir = stage / "qemu"
+            stage_runtime(runtime_dir, args.arch)
+            runtime_archive = out / f"runtime-{args.platform}-{args.arch}.tar.gz"
+            pack(runtime_dir, runtime_archive)
+            shutil.rmtree(runtime_dir)
+        if runtime_archive.name != f"runtime-{args.platform}-{args.arch}.tar.gz":
+            raise ValueError("QEMU archive does not match the host platform")
+        flags += ["-X", f"main.runtimeURL={(args.runtime_base_url or args.base_url).rstrip('/')}/{runtime_archive.name}",
                   "-X", f"main.runtimeSHA256={digest(runtime_archive)}"]
-        shutil.rmtree(runtime_dir)
     if args.platform == "macos":
         if args.arch != "arm64":
             raise ValueError("macOS MVP supports Apple Silicon")

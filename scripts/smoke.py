@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Boot a disposable VM; exercise Kite, a real workload, restart and cold restore."""
 import argparse
+import hashlib
 import http.cookiejar
 import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import subprocess
 import time
 import urllib.error
@@ -44,6 +46,8 @@ def main():
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--restore", action="store_true")
     parser.add_argument("--gateway", action="store_true", help="accept packaged Caddy and preloaded Traefik")
+    parser.add_argument("--replacement-binary", type=Path, help="restart automatically with a different app recommendation")
+    parser.add_argument("--runtime-archive", type=Path, help="exact QEMU archive pinned by the replacement app")
     args = parser.parse_args()
     binary, bundle, state = args.binary.resolve(), args.bundle.resolve(), args.state.resolve()
     state.mkdir()  # Never use existing user data.
@@ -53,15 +57,24 @@ def main():
     marker = None
     timeout = int(os.environ.get("CONTAINERS_SMOKE_BOOT_SECONDS", "600"))
 
-    def boot(directory, fresh=False):
+    def boot(directory, fresh=False, replacement=False):
         label = "fresh" if fresh else "restart"
         log = (directory / (label + "-smoke.log")).open("w")
-        process = subprocess.Popen([str(binary), "serve", "--state", str(directory), "--bundle", str(bundle), "--port", "0", "--no-open"], stdout=log, stderr=log,
+        command = [str(args.replacement_binary.resolve() if replacement else binary), "serve", "--state", str(directory), "--port", "0", "--no-open"]
+        if not replacement:
+            command += ["--bundle", str(bundle)]
+        process = subprocess.Popen(command, stdout=log, stderr=log,
                                    env=dict(os.environ, CONTAINERS_NO_BROWSER="1"))
         c = None
         try:
             c = wait_for(lambda: json.loads((directory / "control.json").read_text()), process, timeout)
-            wait_for(lambda: json.loads(request(c["URL"]+"/control/status", c["Token"])).get("healthy"), process, timeout)
+            def ready():
+                status = json.loads(request(c["URL"]+"/control/status", c["Token"]))
+                if "protocol" in status:
+                    assert status["protocol"] == 1
+                    assert {"status", "logs", "stop", "kite-proxy"}.issubset(status["capabilities"])
+                return status.get("healthy")
+            wait_for(ready, process, timeout)
             try:
                 request(c["AppURL"]+"/api/v1/bootstrap")
                 raise AssertionError("Kite bootstrap exposed without host capability")
@@ -163,7 +176,21 @@ def main():
         assert process.returncode == 0
 
     boot(state, fresh=True)
-    boot(state)
+    if args.replacement_binary:
+        if not args.runtime_archive:
+            raise ValueError("Replacement acceptance needs its exact runtime archive")
+        original = (state / "release.json").read_bytes()
+        shutil.copytree(bundle, state / "appliances/acceptance/bundle", copy_function=os.link)
+        with args.runtime_archive.open("rb") as f:
+            runtime_sha = hashlib.file_digest(f, "sha256").hexdigest()
+        runtime = state / "runtimes" / runtime_sha / "qemu"
+        shutil.copytree(bundle.parent / "qemu", runtime, copy_function=os.link)
+        (runtime / ".archive-sha256").write_text(runtime_sha)
+        boot(state, replacement=True)
+        assert (state / "release.json").read_bytes() == original, "App replacement changed appliance identity"
+        print("PASS: replacement app retains exact appliance, Kite identity and PVC with no appliance download", flush=True)
+    else:
+        boot(state)
     if args.restore:
         archive = state.parent / (state.name+".age")
         restored = state.parent / (state.name+"-restored")

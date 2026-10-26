@@ -162,15 +162,18 @@ func rangedHandler(body []byte, ranged bool) http.Handler {
 	})
 }
 
-// An unchanged appliance must be reused from cache instead of re-downloaded,
-// even when the release republishes a byte-different archive of the same content.
+// App replacement must use the disk's identity, not the app's new recommendation.
 func TestBootstrapReusesUnchangedAppliance(t *testing.T) {
-	body := bundleArchive(t, testBundleManifest(t))
+	m := testBundleManifest(t)
+	body := bundleArchive(t, m)
 	server := httptest.NewTLSServer(rangedHandler(body, true))
 	defer server.Close()
 	newDownloadClient = server.Client
 	defer func() { newDownloadClient = downloadClient }()
 	state := t.TempDir()
+	if err := saveJSON(filepath.Join(state, "release.json"), m); err != nil {
+		t.Fatal(err)
+	}
 	root := filepath.Join(state, "appliances")
 	cached := filepath.Join(root, "oldarchivesha", "bundle")
 	if err := extractArchive(bytes.NewReader(body), cached); err != nil {
@@ -187,26 +190,6 @@ func TestBootstrapReusesUnchangedAppliance(t *testing.T) {
 	}
 	if dir != cached {
 		t.Fatalf("re-downloaded instead of reusing: %s", dir)
-	}
-}
-
-func TestRemoteManifestReadsLeadingMember(t *testing.T) {
-	m := testBundleManifest(t)
-	body := bundleArchive(t, m)
-	server := httptest.NewTLSServer(rangedHandler(body, true))
-	defer server.Close()
-	got, err := remoteManifest(server.Client(), server.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bundleID(got) != bundleID(m) {
-		t.Fatal("manifest identity mismatch")
-	}
-	// A server that ignores Range must fail closed rather than buffer the archive.
-	plain := httptest.NewTLSServer(rangedHandler(body, false))
-	defer plain.Close()
-	if _, err := remoteManifest(plain.Client(), plain.URL); err == nil {
-		t.Fatal("accepted an unranged response")
 	}
 }
 
@@ -254,9 +237,7 @@ func tarGz(t *testing.T, files map[string]string) []byte {
 	return b.Bytes()
 }
 
-// The VM launcher resolves QEMU as <bundle>/../qemu, so bootstrap must install
-// the runtime there for both fresh installs and cache reuse.
-func TestBootstrapInstallsRuntimeBesideBundle(t *testing.T) {
+func TestBootstrapInstallsIndependentRuntime(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		t.Skip("macOS uses Virtualization.framework, not QEMU")
 	}
@@ -274,12 +255,12 @@ func TestBootstrapInstallsRuntimeBesideBundle(t *testing.T) {
 	defer func() { applianceURL, applianceSHA256, runtimeURL, runtimeSHA256 = "", "", "", "" }()
 	state := t.TempDir()
 	for _, pass := range []string{"fresh install", "cached reuse"} {
-		dir, err := bootstrap(state, func(string) {})
+		_, err := bootstrap(state, func(string) {})
 		if err != nil {
 			t.Fatalf("%s: %v", pass, err)
 		}
-		if _, err := os.Stat(filepath.Join(filepath.Dir(dir), "qemu", "runtime.json")); err != nil {
-			t.Fatalf("%s: runtime not beside bundle: %v", pass, err)
+		if _, err := os.Stat(filepath.Join(runtimeCache(state), "qemu", "runtime.json")); err != nil {
+			t.Fatalf("%s: runtime not in independent cache: %v", pass, err)
 		}
 	}
 }

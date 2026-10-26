@@ -1,9 +1,9 @@
-name: Prepare Containers Anywhere release
+name: Prepare independent component release
 on:
   workflow_dispatch:
     inputs:
       build_run_id:
-        description: Successful Containers Anywhere MVP build run
+        description: Successful app.yml or appliance.yml workflow_dispatch run on develop
         required: true
         type: string
 permissions:
@@ -11,7 +11,7 @@ permissions:
   contents: write
 jobs:
   release:
-    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/care-mvp'
+    if: github.ref == 'refs/heads/develop'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

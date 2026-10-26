@@ -25,9 +25,11 @@ Its releases and history are retained. See [project history](docs/HISTORY.md).
 
 1. Install the **Containers Anywhere** DMG, EXE or AppImage.
 2. Open it. A small local control panel appears immediately.
-3. The launcher downloads its exact VM archive and, on Linux/Windows, its QEMU
+3. For a new cluster, the launcher downloads its recommended exact VM archive and, on Linux/Windows, its QEMU
    runtime. Download hashes are pinned **inside the launcher**. Interrupted
    transfers resume; archives are verified before extraction and activation.
+   Replacing the app retains an existing cluster's exact selected appliance;
+   app and appliance releases are independent.
 4. Once the cluster is ready, choose **Open CNCM**: it is preinstalled, signs you up
    with a pre-filled bootstrap token, and deploys CARE at `http://care.care.local`
    (other devices on the LAN can use it too). Advanced users can choose
@@ -123,7 +125,8 @@ Environment settings (inherited by the desktop's launcher child):
 State defaults to `~/Library/Application Support/containers-anywhere` on macOS,
 `${XDG_CONFIG_HOME:-~/.config}/containers-anywhere` on Linux, and
 `%APPDATA%\containers-anywhere` on Windows. Uninstalling the launcher preserves it.
-Download caches are under `appliances/` inside state. Avoid cloud-synced folders.
+Appliance caches are under `appliances/` inside state; independently pinned QEMU
+runtimes are under `runtimes/`. Avoid cloud-synced folders.
 
 ## Backup and restore
 
@@ -149,27 +152,34 @@ original launcher and bundle; this MVP refuses in-place appliance upgrades.
 
 ## Build and acceptance
 
-Builds, Go tests and packaging run in **GitHub Actions**. The `Build Containers
-Anywhere MVP` workflow builds both appliances and all four desktop packages.
+Builds, Go tests and packaging run in **GitHub Actions**. Separate
+`Build and accept appliance` and `Build and accept app` workflows build the VM
+or reuse an already-released VM, respectively. Both package all four host targets.
 Linux AMD64 acceptance boots QEMU/KVM, creates a Kite administrator, deploys a
 PVC-backed web Deployment via Kite, verifies HTTP access, reboots, and repeats after an
-encrypted backup/restore. Windows runs equivalent boot/restart checks under TCG.
+encrypted backup/restore, including app replacement that retains the original
+appliance. Windows TCG boot acceptance is currently disabled due to hosted-runner
+timeouts.
 Physical Windows WHPX, Linux ARM64 KVM and local macOS boot still need hardware
 acceptance; successful cross-compilation does not establish those results.
 
 ```sh
-gh workflow run alpha.yml --ref containers-anywhere
+gh workflow run appliance.yml --ref develop
+# After an independent appliance release is available, build only the app:
+gh workflow run app.yml --ref develop -f appliance_tag=appliance-v0.1.0
 # After a successful build, prepare a complete draft (does not publish):
-gh workflow run release.yml --ref containers-anywhere -f build_run_id=<run-id>
+gh workflow run release.yml --ref develop -f build_run_id=<run-id>
 ```
 
-Artifacts use `0.1.0-mvp.<run-number>`. Launchers point to immutable
-`containers-v<version>` release URLs in the repository that built them. **The
-complete draft must be published before first-run downloads work for users.**
-Actions artifacts alone are useful for local-bundle testing; their future public
-download URLs are not live until publication. Alpha 49 is already published.
-New builds use `tellmeY18/containers_anywhere`; older launchers rely on GitHub's
-redirect from the former repository name. Do not reuse that old repository name.
+App versions come from `VERSION` and use `app-v<semver>`; appliance versions come
+from `APPLIANCE_VERSION` and use `appliance-v<semver>`. New app builds pin published
+component URLs and fixed hashes; app-only fixes never rebuild or replace the VM.
+See [release usage, trust and compatibility](docs/RELEASES.md). **This milestone
+does not complete the remaining 0.1.0 release gates or publish any assets.**
+Initial appliance candidates use local-bundle acceptance until an independently
+approved component release exists. Alpha 49 remains published under its original
+`containers-v0.1.0-mvp.49` identity. Older launchers rely on GitHub's redirect from
+the former repository name; do not reuse that name.
 
 Build tools: Go, Nix on a matching Linux builder, Python 3.11+, platform packaging
 tools; no Node frontend toolchain. The flake pins nixpkgs/microvm.nix. Kite Linux
@@ -181,9 +191,9 @@ nix build .#packages.aarch64-linux.bundle
 # Export only manifest.json, kernel, initrd, system.img and data.img.
 # Never copy the whole build closure to the consumer machine.
 python3 scripts/appliance.py /nix/store/<bundle> dist/appliance-arm64.tar.gz
-python3 scripts/package.py macos --arch arm64 --version 0.1.0-mvp.1 \
+python3 scripts/package.py macos --arch arm64 --version 0.1.0 \
   --appliance dist/appliance-arm64.tar.gz \
-  --base-url https://github.com/<owner>/<repo>/releases/download/containers-v0.1.0-mvp.1
+  --base-url https://github.com/tellmeY18/containers_anywhere/releases/download/appliance-v0.1.0
 ```
 
 ## MVP boundaries

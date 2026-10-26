@@ -13,6 +13,13 @@ shipped unless explicitly marked available. No CARE-specific work is included.
 
 ## R1 — Prove and inspect recovery points
 
+Release engineering is tracked separately in [RELEASES.md](docs/RELEASES.md).
+Independent app/appliance build and draft-promotion paths are in source, pending
+CI acceptance; they do not ship final 0.1.0. Its remaining gates include universal
+profile separation, native host supervision/resource/health handling, off-device
+cold recovery and replacement-host drills, journaled appliance updates and
+physical platform acceptance. No appliance migration is enabled by app replacement.
+
 - Backup manifest: identity, timestamp, disk geometry, checksums, format and tool
   versions; preserve backward readability of published alpha backups.
 - Standalone authenticated backup verification without activation; distinguish

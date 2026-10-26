@@ -7,10 +7,12 @@ import (
 	"errors"
 	"io"
 	"os"
+
+	"github.com/tellmeY18/containers_anywhere/internal/protocol"
 )
 
 func validateLayers(m manifest) error {
-	if m.Format != 3 || m.Product != "containers-anywhere" || m.Protocol != 1 ||
+	if m.Format != 3 || m.Product != "containers-anywhere" || !protocol.Supports(m.Protocol, m.Capabilities) ||
 		m.DataBytes < 1<<30 || m.DataBytes > 64<<30 || len(m.Files) != 4 ||
 		m.Kernel != "kernel" || m.Initrd != "initrd" {
 		return errors.New("invalid Containers Anywhere bundle")

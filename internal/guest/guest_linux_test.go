@@ -1,4 +1,4 @@
-package main
+package guest
 
 import (
 	"encoding/json"
@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tellmeY18/containers_anywhere/internal/atomicfile"
 )
 
 func TestKiteSecretsPersistAndRecreateManifest(t *testing.T) {
@@ -66,7 +68,7 @@ func TestKiteSecretsExistingFiles(t *testing.T) {
 		t.Run(content, func(t *testing.T) {
 			root := t.TempDir()
 			keys := filepath.Join(root, "containers-anywhere/kite-secrets.json")
-			if err := atomicWrite(keys, []byte(content), 0600); err != nil {
+			if err := atomicfile.WritePrivate(keys, []byte(content)); err != nil {
 				t.Fatal(err)
 			}
 			err := initKiteSecrets(root)
