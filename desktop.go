@@ -15,13 +15,9 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 )
-
-// cncmOpened makes the CNCM setup page open once per desktop session.
-var cncmOpened atomic.Bool
 
 func openURL(url string) error {
 	if os.Getenv("CONTAINERS_NO_BROWSER") == "1" {
@@ -248,32 +244,8 @@ func desktop(state, bundle string) error {
 							Healthy bool `json:"healthy"`
 						}
 						if json.Unmarshal(b, &health) == nil && health.Healthy {
-							s["phase"], s["detail"] = "ready", "K3s and Kite are ready. Open CNCM to set up CARE, or Kite for advanced cluster management."
+							s["phase"], s["detail"] = "ready", "K3s and Kite are ready. Open Kite to install and manage your workloads."
 							s["kiteURL"] = cc.AppURL + "/_open?token=" + cc.AppToken
-							gw, _ := s["gateway"].(map[string]any)
-							base := ""
-							if demo, _ := gw["demoURL"].(string); demo != "" {
-								base = strings.Replace(demo, "demo.local", "cncm.cncm-system.local", 1)
-							} else if urls, _ := gw["urls"].([]any); len(urls) > 0 {
-								// mDNS is unavailable; this machine resolves *.localhost itself.
-								for _, u := range urls {
-									if v, _ := u.(string); strings.Contains(v, "cncm.cncm-system.localhost") {
-										base = v
-									}
-								}
-							}
-							if base != "" {
-								if tb, e := controlCall(cc, "GET", "/control/cncm", nil, 3*time.Second); e == nil {
-									var t struct{ Token string }
-									if json.Unmarshal(tb, &t) == nil && t.Token != "" {
-										link := base + "/#token=" + t.Token
-										s["cncmURL"] = link
-										if cncmOpened.CompareAndSwap(false, true) {
-											go openURL(link)
-										}
-									}
-								}
-							}
 						}
 					}
 				}
@@ -401,11 +373,13 @@ func desktop(state, bundle string) error {
 const desktopHTML = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Containers Anywhere</title>
 <style>body{font:17px system-ui;max-width:760px;margin:8vh auto;padding:24px;background:#101827;color:#e2e8f0}button,a{font:inherit;padding:12px 18px;border:0;border-radius:8px;background:#34d399;color:#10251b;cursor:pointer;display:inline-block;margin:6px 4px 6px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}small{color:#94a3b8}[hidden]{display:none}</style>
 <h1>Containers Anywhere</h1><p>Your Kubernetes. On this computer.</p><h2 id="phase">Starting</h2><p id="detail" role="status">Preparing your appliance…</p>
-<a id="cncm" hidden target="_blank" rel="noopener noreferrer">Open CNCM</a><a id="kite" hidden target="_blank" rel="noopener noreferrer">Open Kite</a><a id="demo" hidden target="_blank" rel="noopener noreferrer">Open demo.local</a><button id="start">Start / Retry</button><button id="stop">Stop cluster</button><button id="quit">Quit</button><button id="logs">Diagnostics</button>
+<a id="kite" hidden target="_blank" rel="noopener noreferrer">Open Kite</a><button id="start">Start / Retry</button><button id="stop">Stop cluster</button><button id="quit">Quit</button><button id="logs">Diagnostics</button>
 <p id="gateway-status" role="status"></p>
+<div id="workloads"></div>
 <button id="setup" hidden>Set up this computer</button><button id="restart" hidden>Restart Windows now</button>
 <p><small>The first launch downloads a verified VM and, on Linux/Windows, its QEMU runtime. Closing this tab keeps your cluster running. New workloads may require internet access.</small></p><pre id="output"></pre>
 <script>let token=location.hash.slice(1)||sessionStorage.getItem('token');if(token){sessionStorage.setItem('token',token);history.replaceState(null,'',location.pathname)}
 async function call(path,method='GET'){let r=await fetch('/'+path,{method,headers:{Authorization:'Bearer '+token}});let text=await r.text();if(!r.ok)throw Error(text);return text}
-let opened=false;async function poll(){try{let s=JSON.parse(await call('status'));document.getElementById('phase').textContent=s.phase;document.getElementById('detail').textContent=s.detail;document.getElementById('setup').hidden=!s.setupRequired;document.getElementById('restart').hidden=!s.restartRequired;document.getElementById('start').disabled=s.setupRequired||s.restartRequired||s.phase==='setup';let d=document.getElementById('demo');d.hidden=!s.gateway?.demoURL;if(s.gateway?.demoURL)d.href=s.gateway.demoURL;document.getElementById('gateway-status').textContent=s.gateway?[s.gateway.error,s.gateway.processError,s.gateway.discoveryError].filter(Boolean).join(' · '):'';let n=document.getElementById('cncm');n.hidden=!s.cncmURL;if(s.cncmURL)n.href=s.cncmURL;let a=document.getElementById('kite');a.hidden=!s.kiteURL;if(s.kiteURL){a.href=s.kiteURL;if(!opened){opened=true;document.title='Ready — Containers Anywhere'}}}catch(e){document.getElementById('detail').textContent=e.message}setTimeout(poll,2500)}
+function workloads(gateway){let box=document.getElementById('workloads');box.replaceChildren();for(let endpoint of gateway?.endpoints||[]){let row=document.createElement('p');if(endpoint.ready){let a=document.createElement('a');a.href=endpoint.url;a.textContent=endpoint.url;a.target='_blank';a.rel='noopener noreferrer';row.append(a);let note=document.createElement('small');note.textContent=endpoint.advertised?'mDNS announced; client reachability and CA trust need verification':'Responding on configured addresses; client DNS and CA trust need verification';row.append(note)}else{row.textContent=endpoint.url+' — '+(endpoint.error||'Checking workload')}box.append(row)}}
+let opened=false;async function poll(){try{let s=JSON.parse(await call('status'));document.getElementById('phase').textContent=s.phase;document.getElementById('detail').textContent=s.detail;document.getElementById('setup').hidden=!s.setupRequired;document.getElementById('restart').hidden=!s.restartRequired;document.getElementById('start').disabled=s.setupRequired||s.restartRequired||s.phase==='setup';document.getElementById('gateway-status').textContent=s.gateway?[s.gateway.error,s.gateway.processError,s.gateway.discoveryError].filter(Boolean).join(' · '):'';workloads(s.gateway);let a=document.getElementById('kite');a.hidden=!s.kiteURL;if(s.kiteURL){a.href=s.kiteURL;if(!opened){opened=true;document.title='Ready — Containers Anywhere'}}}catch(e){document.getElementById('detail').textContent=e.message}setTimeout(poll,2500)}
 for(let name of ['start','stop','quit','logs','setup','restart'])document.getElementById(name).onclick=async()=>{if(name==='restart'&&!confirm('Save your work first. Restart Windows now?'))return;try{let text=await call(name,name==='logs'?'GET':'POST');document.getElementById('output').textContent=text}catch(e){document.getElementById('output').textContent=e.message}};poll();</script></html>`

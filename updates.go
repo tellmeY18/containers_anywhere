@@ -15,7 +15,7 @@ func validateLayers(m manifest) error {
 	if m.Format != 3 || m.Product != "containers-anywhere" || !protocol.Supports(m.Protocol, m.Capabilities) ||
 		m.DataBytes < 1<<30 || m.DataBytes > 64<<30 || len(m.Files) != 4 ||
 		m.Kernel != "kernel" || m.Initrd != "initrd" {
-		return errors.New("invalid Containers Anywhere bundle")
+		return errors.New("unsupported Containers Anywhere bundle: current protocol and capabilities required; use a current appliance with a new empty state directory")
 	}
 	return nil
 }

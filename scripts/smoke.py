@@ -39,6 +39,13 @@ def wait_for(fn, process, seconds=600):
     raise TimeoutError(f"Appliance did not become ready: {error}")
 
 
+def launch_command(binary, state, bundle=None):
+    command = [str(binary), "serve", "--state", str(state), "--port", "0", "--no-open"]
+    if bundle is not None:
+        command += ["--bundle", str(bundle)]
+    return command
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
@@ -48,11 +55,15 @@ def main():
     parser.add_argument("--gateway", action="store_true", help="accept packaged Caddy and preloaded Traefik")
     parser.add_argument("--replacement-binary", type=Path, help="restart automatically with a different app recommendation")
     parser.add_argument("--runtime-archive", type=Path, help="exact QEMU archive pinned by the replacement app")
+    parser.add_argument("--download", action="store_true", help="fresh boot through the packaged launcher's actual public download pins")
     args = parser.parse_args()
     binary, bundle, state = args.binary.resolve(), args.bundle.resolve(), args.state.resolve()
     state.mkdir()  # Never use existing user data.
     gateway_root = None
-    (state / "gateway.json").write_text(json.dumps({"port": 18443, "httpPort": 18080, "namespaces": ["default"], "domains": ["default.localhost"]}))
+    gateway_config = json.dumps({"port": 18443, "httpPort": 18080,
+                                "namespaces": ["default", "containers-demo"],
+                                "domains": ["default.localhost", "demo.local", "demo.localhost"]}).encode()
+    (state / "gateway.json").write_bytes(gateway_config)
     admin = {"username": "mvptest", "password": secrets.token_urlsafe(24), "enableAnalytics": False}
     marker = None
     timeout = int(os.environ.get("CONTAINERS_SMOKE_BOOT_SECONDS", "600"))
@@ -60,19 +71,24 @@ def main():
     def boot(directory, fresh=False, replacement=False):
         label = "fresh" if fresh else "restart"
         log = (directory / (label + "-smoke.log")).open("w")
-        command = [str(args.replacement_binary.resolve() if replacement else binary), "serve", "--state", str(directory), "--port", "0", "--no-open"]
-        if not replacement:
-            command += ["--bundle", str(bundle)]
+        selected_binary = args.replacement_binary.resolve() if replacement else binary
+        selected_bundle = None if replacement or (fresh and args.download) else bundle
+        command = launch_command(selected_binary, directory, selected_bundle)
         process = subprocess.Popen(command, stdout=log, stderr=log,
                                    env=dict(os.environ, CONTAINERS_NO_BROWSER="1"))
         c = None
         try:
             c = wait_for(lambda: json.loads((directory / "control.json").read_text()), process, timeout)
+            if fresh and args.download:
+                selected = json.loads((directory / "release.json").read_text())
+                expected = json.loads((bundle / "manifest.json").read_text())
+                for key, value in selected.items():
+                    assert expected.get(key) == value, f"Public bootstrap selected the wrong appliance: {key}"
+                assert (directory / "appliance.json").is_file(), "Public bootstrap did not persist its download receipt"
             def ready():
                 status = json.loads(request(c["URL"]+"/control/status", c["Token"]))
-                if "protocol" in status:
-                    assert status["protocol"] == 1
-                    assert {"status", "logs", "stop", "kite-proxy"}.issubset(status["capabilities"])
+                assert status["protocol"] == 1
+                assert {"status", "logs", "stop", "kite-proxy"}.issubset(status["capabilities"])
                 return status.get("healthy")
             wait_for(ready, process, timeout)
             try:
@@ -88,6 +104,12 @@ def main():
             assert json.loads(request(c["AppURL"]+"/api/v1/bootstrap", opener=browser))["setup"]["initialized"]
             assert b"local" in request(c["AppURL"]+"/api/v1/clusters", opener=browser)
             if fresh:
+                for namespace in ["cncm-system", "care"]:
+                    try:
+                        request(c["AppURL"]+"/api/v1/namespaces/_all/"+namespace, opener=browser)
+                        raise AssertionError(f"Fresh universal appliance preinstalled {namespace}")
+                    except urllib.error.HTTPError as e:
+                        assert e.code == 404, f"Cannot inspect fresh namespaces: {e}"
                 # This is a real additional workload, with a PVC whose contents
                 # must survive both reboot and an encrypted backup round trip.
                 resources = [
@@ -110,6 +132,7 @@ def main():
                     ingress = {"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": {"name": "mvp-web", "namespace": "default"},
                                "spec": {"ingressClassName": "containers-anywhere", "rules": [{"host": "app.default.localhost", "http": {"paths": [{"path": "/", "pathType": "Prefix", "backend": {"service": {"name": "mvp-web", "port": {"number": 8080}}}}]}}]}}
                     request(c["AppURL"]+"/api/v1/resources/apply", data={"yaml": json.dumps(ingress), "namespace": "default"}, opener=browser)
+            assert (directory / "gateway.json").read_bytes() == gateway_config, "Saved gateway grants were overwritten"
             nonlocal marker
             observed = wait_for(lambda: request(c["AppURL"]+"/api/v1/namespaces/default/services/mvp-web:8080/proxy/", opener=browser), process, timeout)
             if fresh:
@@ -134,6 +157,10 @@ def main():
                     return result.returncode == 0 and result.stdout == marker
 
                 wait_for(gateway_ready, process, timeout)
+                def publication_ready():
+                    status = json.loads(request(c["URL"]+"/control/gateway", c["Token"]))
+                    return any(e["url"] == target and e["ready"] and not e["advertised"] for e in status.get("endpoints", []))
+                wait_for(publication_ready, process, timeout)
                 demo_command = ["curl", "--silent", "--show-error", "--fail", "--noproxy", "*", "--max-time", "20",
                                 "--resolve", "demo.local:18080:127.0.0.1", "http://demo.local:18080/"]
                 last = []
@@ -157,7 +184,9 @@ def main():
                     result = subprocess.run(base + ["--cacert", str(root), target.rstrip("/")+path], capture_output=True)
                     assert result.returncode != 0, "Workload gateway exposed appliance management"
                 print("PASS: Caddy trusted HTTPS, Traefik Ingress, management isolation and persistent CA", flush=True)
-            print("PASS: Kite auth, local cluster, workload HTTP and persistent volume", flush=True)
+            print("PASS: Kite auth, current protocol, generic workload/PVC and saved gateway grants", flush=True)
+            if fresh and args.download:
+                print("PASS: actual public pinned appliance/runtime bootstrap into fresh state", flush=True)
         finally:
             if c and process.poll() is None:
                 try:
@@ -187,9 +216,10 @@ def main():
         shutil.copytree(bundle, state / "appliances/acceptance/bundle", copy_function=os.link)
         with args.runtime_archive.open("rb") as f:
             runtime_sha = hashlib.file_digest(f, "sha256").hexdigest()
-        runtime = state / "runtimes" / runtime_sha / "qemu"
-        shutil.copytree(bundle.parent / "qemu", runtime, copy_function=os.link)
-        (runtime / ".archive-sha256").write_text(runtime_sha)
+        if not args.download:
+            runtime = state / "runtimes" / runtime_sha / "qemu"
+            shutil.copytree(bundle.parent / "qemu", runtime, copy_function=os.link)
+            (runtime / ".archive-sha256").write_text(runtime_sha)
         boot(state, replacement=True)
         assert (state / "release.json").read_bytes() == original, "App replacement changed appliance identity"
         print("PASS: replacement app retains exact appliance, Kite identity and PVC with no appliance download", flush=True)

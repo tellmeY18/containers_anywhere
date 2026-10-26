@@ -92,7 +92,6 @@ in
     gracefulNodeShutdown.enable = true;
     images = [ config.services.k3s.package.airgap-images kite gateway.image demo ];
     manifests.kite.source = ./kite.yaml;
-    manifests.cncm.source = ./cncm.yaml;
     manifests.gateway.source = gateway.manifest;
     manifests.demo.source = pkgs.writeText "demo.yaml" (builtins.replaceStrings
       [ "@CADDY_VERSION@" ] [ pkgs.caddy.version ] (builtins.readFile ./demo.yaml));

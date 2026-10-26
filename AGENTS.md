@@ -4,6 +4,12 @@ Read README.md first. Containers Anywhere is an independent, application-agnosti
 K3s appliance. Recovery design is in docs/DISASTER_RECOVERY.md; delivery gates are
 in ROADMAP.md. Planned recovery features must not be described as implemented.
 
+- Until the user explicitly declares stability, backward compatibility is not
+  a requirement: do not implement, maintain or run legacy/alpha compatibility,
+  migration matrices or preservation drills solely for old releases. Prioritize
+  fresh 0.1.0 installs and independently released current app/appliance contracts.
+  Retain integrity/security checks and non-destructive incompatible-data errors;
+  require an explicit reset/new state directory, never delete data automatically.
 - Small native Go host launcher, downloadable NixOS VM, single-node K3s and Kite.
 - macOS uses Virtualization.framework; Linux/Windows use downloaded, hash-verified
   QEMU with KVM/WHPX. No host Docker, Python, Nix or Node runtime dependencies.
@@ -37,4 +43,5 @@ in ROADMAP.md. Planned recovery features must not be described as implemented.
 
 Key files: main.go (host CLI/proxy), desktop.go (embedded bootstrap panel),
 bootstrap.go (pinned resumable downloads), storage.go (disk/backup), vm_*.go,
-nix/guest.nix and nix/kite.* (appliance), scripts/package.py and alpha.yml (release).
+nix/guest.nix and nix/kite.* (appliance), cmd/guest and internal/guest (guest agent),
+scripts/package.py and app.yml/appliance.yml/release.yml (independent releases).

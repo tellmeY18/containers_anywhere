@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from components import APPLIANCES, RUNTIMES, PUBLISHER, digest, fetch, semver, validate_descriptor, validate_lock
+from components import APPLIANCES, RUNTIMES, PUBLISHER, digest, fetch, resolve, semver, validate_descriptor, validate_lock
 from release import asset_names, build_component, verify_assets
 import package
 
@@ -14,6 +14,51 @@ def descriptor():
 
 
 class ComponentsTest(unittest.TestCase):
+    def test_published_descriptor_requires_public_release_and_matching_source(self):
+        data = descriptor()
+        info = {"draft": False, "tag_name": "appliance-v0.1.0", "id": 42,
+                "assets": [{"name": n} for n in data["files"]]}
+        def github(*args):
+            if args[0:2] == ("release", "download"):
+                (Path(args[-1]) / "appliance-release.json").write_text(json.dumps(data))
+                return ""
+            if "/commits/" in args[1]:
+                return "a" * 40
+            return json.dumps(info)
+        with patch("components.gh", side_effect=github):
+            self.assertEqual(resolve("appliance-v0.1.0")["release_id"], 42)
+            info["draft"] = True
+            with self.assertRaisesRegex(ValueError, "already published"):
+                resolve("appliance-v0.1.0")
+            info["draft"] = False
+            data["source"] = "b" * 40
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                resolve("appliance-v0.1.0")
+
+    def test_public_fetch_checks_resolved_hash_and_https(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "artifact"
+            artifact.write_bytes(b"public artifact")
+            data = descriptor()
+            data["files"]["appliance-arm64.tar.gz"] = digest(artifact)
+            dependency = {"tag": "appliance-v0.1.0", "release_id": 42, "descriptor": data}
+            lock = {"schema": 1, "publisher": PUBLISHER, "appliance": dependency, "runtime": dependency}
+            for label, body, url, accepted in [
+                ("valid", b"public artifact", "https://release-assets.githubusercontent.com/asset", True),
+                ("corrupt", b"changed bytes", "https://release-assets.githubusercontent.com/asset", False),
+                ("insecure", b"public artifact", "http://example.com/asset", False),
+            ]:
+                response = io.BytesIO(body)
+                response.url = url
+                with patch("components.urllib.request.urlopen", return_value=response) as download:
+                    if accepted:
+                        fetch(lock, "macos", "arm64", root / label)
+                    else:
+                        with self.assertRaises(ValueError):
+                            fetch(lock, "macos", "arm64", root / label)
+                    download.assert_called_once_with(f"https://github.com/{PUBLISHER}/releases/download/appliance-v0.1.0/appliance-arm64.tar.gz")
+
     def test_semver(self):
         for value in ("0.1.0", "0.1.1", "1.2.3-rc.1", "0.1.0-mvp.49"):
             self.assertEqual(semver(value), value)
@@ -120,3 +165,5 @@ class ComponentsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+import io
+import json

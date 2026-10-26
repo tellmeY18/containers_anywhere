@@ -5,9 +5,12 @@ acceptance. Native Caddy, Traefik, the preloaded demo and IPv4 mDNS are wired
 together. Automatic firewall setup, privileged port setup, OS trust enrollment,
 Gateway API conformance and physical-platform acceptance remain outstanding.
 
-Packaged launchers default to HTTP 80/HTTPS 443 on loopback and the explicit
-private IPv4 LAN addresses discovered on first launch. The default grant
-publishes only the built-in demo. Management stays private. Ports are not
+Fresh packaged launchers default to HTTP 8080/HTTPS 8443 on loopback only, with
+mDNS disabled. The default grant publishes only the built-in diagnostic demo.
+Application installation and LAN exposure are explicit owner choices; CNCM/CARE
+have no special gateway privileges. Saved gateway.json files are read unchanged,
+including previously granted application namespaces, domains, addresses and ports.
+Management stays private. Ports are not
 silently changed when unavailable; Linux commonly requires OS socket/capability
 setup for these ports. Never run the VM launcher as root as a workaround.
 
@@ -65,7 +68,10 @@ Replace the LAN address with this computer's address. Omit addresses to keep
 the gateway loopback-only; omit mdns to disable discovery. The owner grants
 namespace/domain publication before starting. Configuration requires the
 exclusive lifecycle lock. Wildcard/public-IP binds and unknown JSON fields
-are rejected. Port conflicts fail visibly instead of changing URLs.
+are rejected, except a sole `0.0.0.0` address remains accepted for compatibility
+with saved configurations from earlier launchers. Prefer explicit private IPv4
+addresses; wildcard binding can expose workloads on unintended interfaces.
+Port conflicts fail visibly instead of changing URLs.
 
 After creating an `example` namespace and an HTTP Service named `web`, a workload
 manager, Kite, or kubectl can publish it with:
@@ -93,8 +99,15 @@ spec:
 
 Open `https://app.example.localhost:8443`. Some resolvers do not implement
 subdomains of localhost; an explicit hosts entry or curl --resolve is then
-needed. Application `.local` names are accepted within the namespace convention;
-automatic mDNS currently advertises only the built-in demo.local.
+needed. For mDNS use an Ingress host such as `app.example.local` and grant
+`example.local` in the configuration instead. The same Ingress contract works for
+applications installed through Kite, Helm, CNCM or any authorized Kubernetes
+client. No application-specific gateway discovery is necessary.
+
+Ingress is Kubernetes' built-in API, not a custom CRD. Gateway API CRDs and a
+Kubernetes-visible publication status/controller remain future work. Workloads
+do not control host bind addresses, host grants, firewall rules or client trust.
+Do not replace these checks with blanket publication of every Ingress.
 
 ## Out-of-box demo and mDNS
 
@@ -104,12 +117,32 @@ resource name reserve those exact hostnames. No external image download is
 needed. The branded page is actually served by that pod, through Traefik and
 native Caddy; it is not a launcher fallback page.
 
-The host announces demo.local only after retrieving that page through Caddy's
-HTTP listener. The responder probes for conflicting names, sends A/PTR/SRV/TXT
+The demo's exact names are reserved to its namespace/resource, but still require
+an explicit namespace/domain grant, just like applications. When supplying a
+custom configuration, include `containers-demo` and `demo.local`/`demo.localhost`
+only if the diagnostic demo should remain published.
+
+The host announces each approved `.local` name only after a probe traverses
+Caddy, the authenticated VM bridge and Traefik to a responding workload on every
+configured address. Applications are probed at `GET /` over HTTPS, using the
+persisted Caddy root CA and the correct TLS hostname; no certificate verification
+is bypassed. HTTP redirects from Caddy alone do not establish readiness.
+Application 2xx/3xx/401/403 responses count as responding; redirects are not
+followed and no application credentials are sent. Other statuses (including
+404/5xx), connection failures and invalid TLS are reported, not advertised.
+Applications serving only a non-root path remain routable but will not be marked
+responding or advertised until their root responds. This is endpoint availability,
+not application health, login success or a production readiness guarantee.
+
+The non-sensitive demo is checked over HTTP and must return its expected page.
+The responder probes for conflicting names, sends A/PTR/SRV/TXT
 records on configured IPv4 interfaces, refreshes them, and sends goodbye records
-on stop or failed health checks. It publishes no AAAA record. A second appliance
-claiming demo.local is reported as a conflict, not silently renamed. Only one
-such demo name can be used per multicast link. Network changes withdraw stale
+on stop, removed approval or failed endpoint checks. Application SRV records use
+`_https._tcp` and the configured HTTPS port; the demo uses `_http._tcp` and its
+HTTP port. No CARE/CNCM names are synthesized and no AAAA records are published.
+Name conflicts are reported, not silently renamed; a conflict conservatively
+withdraws the current advertisement set. Only one owner of a name can be used
+per multicast link. Network changes withdraw stale
 advertisements; the owner must reconfigure changed addresses.
 
 From a second computer with the launcher installed, run
@@ -119,8 +152,9 @@ retrieves the expected pod page over the discovered host port. It does not
 start a VM, install trust, or change firewall settings. This is a connectivity
 check, not a cryptographic identity check; HTTP/mDNS can be spoofed on the LAN.
 
-Open `http://demo.local` from a second device on the same network (include the
-configured HTTP port if not 80). This non-sensitive static demo is the only
+After explicitly configuring LAN addresses, mDNS and demo grants, open
+`http://demo.local:8080` from a second device (use your configured HTTP port).
+This non-sensitive static demo is the only
 application allowed over HTTP. Other application requests redirect to HTTPS;
 the exact public /root.crt bootstrap resource is also available over HTTP.
 Phones can test the path before CA enrollment. HTTP bootstrap is not authenticated;
@@ -172,10 +206,16 @@ Traefik change does not implement an upgrade/migration path for earlier alphas.
 
 ## Diagnostics and limits
 
-`gateway-status` distinguishes discovery errors from Caddy process exits and
-lists approved URLs. Certificate trust is reported as manual, never inferred
+`gateway-status` distinguishes discovery errors from Caddy process exits.
+`urls` lists approved HTTPS routes, not a health assertion. `endpoints` reports
+each probe URL, `ready` (responding through the gateway), `error`, and
+`advertised` (mDNS announced). The desktop shows responding workload links and
+individual probe errors without automatically opening any application.
+Probe cycles are bounded to 15 seconds plus multicast setup; no-response apps
+can delay the next cycle. A failure withdraws advertisements on the next check.
+Certificate trust is reported as manual, never inferred
 from a running process. See gateway.log in desktop Diagnostics. A helper crash
-is reported; restart the cluster to restart it. No automatic retry of clinical
+is reported; restart the cluster to restart it. No automatic retry of application
 POSTs is introduced. The relay limits concurrent guest connections to 128.
 
 This slice supports HTTP/1.1 and WebSocket upgrades through the bridge. Caddy
@@ -193,7 +233,7 @@ acceptance; source changes and compile checks do not establish those results.
 ## Remaining product work
 
 - Implement per-platform firewall/80/443 setup and network-profile enrollment.
-- Add client trust workflows and general workload-name mDNS with attribution.
+- Add client trust workflows and configurable application health paths.
 - Add Gateway API support and richer Kubernetes-visible publication status if
   needed; do not claim the Ingress implementation is Gateway API conformance.
 - Add supervised automatic recovery of the edge and host startup integration.

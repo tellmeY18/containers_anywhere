@@ -180,6 +180,8 @@ jobs:
       - name: Linux KVM boot, Kite workload, restart and encrypted restore
         if: matrix.platform == 'linux' && matrix.arch == 'amd64'
         shell: bash
+        env:
+          PUBLIC_DEPENDENCIES: ${{ inputs.reuse_appliance && !inputs.candidate_artifacts }}
         run: |
           test -c /dev/kvm
           sudo chmod a+rw /dev/kvm
@@ -194,7 +196,9 @@ jobs:
           appdir=dist/releases/stage-linux-amd64/containers-anywhere
           caddy_sha=$(sha256sum "$appdir/caddy" | cut -d ' ' -f1)
           go build -trimpath -ldflags="-X main.appVersion=replacement-test -X main.applianceURL=https://invalid.example/not-the-installed-appliance -X main.applianceSHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -X main.runtimeURL=https://invalid.example/qemu -X main.runtimeSHA256=$runtime_sha -X main.caddySHA256=$caddy_sha" -o "$appdir/replacement" .
-          python scripts/smoke.py --binary "$appdir/containers-anywhere" --replacement-binary "$appdir/replacement" --runtime-archive "$runtime" --bundle dist/acceptance/bundle --state dist/smoke --restore --gateway
+          extra=()
+          if [ "$PUBLIC_DEPENDENCIES" = true ]; then extra+=(--download); fi
+          python scripts/smoke.py --binary "$appdir/containers-anywhere" --replacement-binary "$appdir/replacement" --runtime-archive "$runtime" --bundle dist/acceptance/bundle --state dist/smoke --restore --gateway "${extra[@]}"
       # Windows WHPX has no hosted runner, so replay its machine/CPU pair under
       # KVM. This checks the configuration WHPX depends on, not WHPX itself.
       - name: Linux KVM boot with the WHPX machine and CPU model

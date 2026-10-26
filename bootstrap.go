@@ -55,7 +55,7 @@ func bootstrap(state string, progress func(string)) (string, error) {
 	}
 	if existing {
 		if err := validateLayers(want); err != nil || want.Arch != runtime.GOARCH {
-			return "", errors.New("installed appliance is incompatible with this launcher or host; retain the original launcher and appliance")
+			return "", errors.New("installed appliance is incompatible with this launcher or host; reset required: choose a new empty state directory (existing data is unchanged)")
 		}
 		if dir, ok := cachedBundle(root, want); ok {
 			progress("Retaining the exact appliance selected by this cluster.")
@@ -69,7 +69,7 @@ func bootstrap(state string, progress func(string)) (string, error) {
 		var selected applianceSelection
 		raw, err := os.ReadFile(filepath.Join(state, "appliance.json"))
 		if err != nil {
-			return "", fmt.Errorf("original appliance is not cached; use --bundle with the exact original appliance: %w", err)
+			return "", fmt.Errorf("selected appliance is not cached and its download receipt is unavailable; use the selected current --bundle or a new empty state directory: %w", err)
 		}
 		if err := json.Unmarshal(raw, &selected); err != nil || selected.BundleID != bundleID(want) {
 			return "", errors.New("saved appliance download does not match cluster identity; use the exact original --bundle")

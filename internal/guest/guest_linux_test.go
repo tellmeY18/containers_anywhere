@@ -89,22 +89,20 @@ func TestKiteSecretsExistingFiles(t *testing.T) {
 	}
 }
 
-func TestCNCMBootstrapTokenIsStable(t *testing.T) {
+func TestKiteInitializationDoesNotProvisionApplications(t *testing.T) {
 	root := t.TempDir()
-	if err := initCNCMSecret(root); err != nil {
+	if err := initKiteSecrets(root); err != nil {
 		t.Fatal(err)
 	}
-	first, err := cncmToken(root)
-	if err != nil || len(first) < 24 {
-		t.Fatalf("token %q, %v", first, err)
+	applications := []string{
+		"containers-anywhere/cncm-bootstrap.json",
+		"rancher/k3s/server/manifests/00-cncm-bootstrap.json",
+		"rancher/k3s/server/manifests/cncm.yaml",
 	}
-	if err = initCNCMSecret(root); err != nil {
-		t.Fatal(err)
-	}
-	if second, _ := cncmToken(root); second != first {
-		t.Fatal("bootstrap token rotated across restarts")
-	}
-	if _, err = os.Stat(filepath.Join(root, "rancher/k3s/server/manifests/00-cncm-bootstrap.json")); err != nil {
-		t.Fatal(err)
+	for _, name := range applications {
+		path := filepath.Join(root, name)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("created application state %s: %v", name, err)
+		}
 	}
 }

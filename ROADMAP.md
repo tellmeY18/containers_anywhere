@@ -3,6 +3,11 @@
 Status: architecture agreed for planning; the recovery features below are not
 shipped unless explicitly marked available. No CARE-specific work is included.
 
+Pre-stability policy: until the user explicitly declares stability, prioritize
+fresh 0.1.0 and current component contracts. Do not implement or run backward
+compatibility, alpha migration matrices or legacy preservation drills. Retain
+integrity/security checks and non-destructive reset-required errors.
+
 ## Available: alpha foundation
 
 - Small desktop launcher, pinned resumable downloads, K3s and Kite appliance.
@@ -11,17 +16,35 @@ shipped unless explicitly marked available. No CARE-specific work is included.
 - Empty-destination restore and exact-appliance compatibility checks.
 - Linux AMD64 KVM boot/restart/restore acceptance; Windows emulated boot/restart.
 
+## Universal defaults — implemented in source, acceptance pending
+
+- Fresh `develop` appliances preload K3s, Kite and the gateway diagnostic demo,
+  not CNCM/CARE. `care-mvp` remains unchanged.
+- Kite is the workload-management entry point; the 2-vCPU/4-GiB defaults have no
+  application-specific memory heuristic or automatic application opening.
+- Fresh gateways are loopback-only with demo-only grants. Explicit namespace/
+  domain grants govern all workload Ingresses, including optional CNCM/CARE.
+- Workload HTTPS probes and mDNS distinguish approved routes, responding
+  endpoints and announcements. DNS resolution is not remote reachability.
+- No existing workload deletion, secret/PVC reset, saved-config replacement or
+  appliance migration. Existing disks retain the exact-appliance requirement.
+
+Gate: fresh-install namespace checks; current gateway settings, generic
+workload/PVC and Kite identity through reboot and encrypted restore.
+Physical multi-device mDNS/firewall/trust tests
+remain required. No Gateway API or publication CRD/controller is shipped.
+
 ## R1 — Prove and inspect recovery points
 
 Release engineering is tracked separately in [RELEASES.md](docs/RELEASES.md).
 Independent app/appliance build and draft-promotion paths are in source, pending
-CI acceptance; they do not ship final 0.1.0. Its remaining gates include universal
-profile separation, native host supervision/resource/health handling, off-device
+integration acceptance; they do not ship final 0.1.0. Universal defaults are
+integrated in source. Remaining work includes native host supervision/resource/health handling, off-device
 cold recovery and replacement-host drills, journaled appliance updates and
 physical platform acceptance. No appliance migration is enabled by app replacement.
 
 - Backup manifest: identity, timestamp, disk geometry, checksums, format and tool
-  versions; preserve backward readability of published alpha backups.
+  versions for the current release; no alpha backward-readability requirement.
 - Standalone authenticated backup verification without activation; distinguish
   archive integrity from a successful application restore.
 - Durable staging/publication journal, interruption cleanup and capacity checks.

@@ -43,6 +43,83 @@ func TestGatewayPublicationBoundary(t *testing.T) {
 	}
 }
 
+func TestGatewayDefaultsAndExistingGrants(t *testing.T) {
+	original := caddySHA256
+	caddySHA256 = "packaged"
+	t.Cleanup(func() { caddySHA256 = original })
+	state := t.TempDir()
+	cfg, err := loadGatewayConfig(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Port != 8443 || cfg.HTTPPort != 8080 || cfg.MDNS || !reflect.DeepEqual(cfg.Addresses, []string{"127.0.0.1"}) {
+		t.Fatalf("unsafe default: %+v", cfg)
+	}
+	for _, tc := range []struct{ host, namespace string }{
+		{"cncm.cncm-system.local", "cncm-system"},
+		{"care.care.local", "care"},
+		{"app.example.local", "example"},
+	} {
+		if cfg.allows(tc.host, tc.namespace) {
+			t.Fatalf("implicitly granted %+v", tc)
+		}
+	}
+	if !cfg.allows("demo.local", "containers-demo") {
+		t.Fatal("missing default demo grant")
+	}
+	saved := []byte("{\n \"port\":443,\"httpPort\":80,\"addresses\":[\"0.0.0.0\"],\"mdns\":true,\n \"namespaces\":[\"cncm-system\",\"care\"],\"domains\":[\"cncm-system.local\",\"care.local\"]\n}\n")
+	path := filepath.Join(state, "gateway.json")
+	if err := os.WriteFile(path, saved, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		cfg, err = loadGatewayConfig(state)
+		if err != nil || !cfg.allows("cncm.cncm-system.local", "cncm-system") || !cfg.allows("care.care.local", "care") {
+			t.Fatalf("lost saved grant: %+v, %v", cfg, err)
+		}
+		if cfg.allows("demo.local", "containers-demo") {
+			t.Fatal("demo bypassed explicit grants")
+		}
+		after, err := os.ReadFile(path)
+		if err != nil || string(after) != string(saved) {
+			t.Fatalf("overwrote saved gateway settings: %v", err)
+		}
+	}
+	if err := os.WriteFile(path, []byte("{invalid"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadGatewayConfig(state); err == nil {
+		t.Fatal("silently reset invalid saved configuration")
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) != "{invalid" {
+		t.Fatal("overwrote invalid saved configuration")
+	}
+}
+
+func TestGatewayDiscoveryRetainsOnErrorAndAppliesDeletion(t *testing.T) {
+	g := &gateway{config: gatewayConfig{Namespaces: []string{"example"}, Domains: []string{"example.local"}}, hosts: []string{"app.example.local"}}
+	code, body := 503, ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(code)
+		io.WriteString(w, body)
+	}))
+	defer server.Close()
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+	}}}
+	defer client.CloseIdleConnections()
+	g.refresh(context.Background(), client)
+	if !g.permits("app.example.local") || g.err == "" {
+		t.Fatal("transient failure lost approved hosts or hid error")
+	}
+	code, body = 200, `{"items":[]}`
+	g.refresh(context.Background(), client)
+	if g.permits("app.example.local") || g.err != "" {
+		t.Fatal("successful deletion retained approval")
+	}
+}
+
 func TestGatewayBridgeDoesNotExposeControl(t *testing.T) {
 	g := &gateway{hosts: []string{"app.example.localhost"}}
 	called := false

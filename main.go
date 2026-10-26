@@ -206,7 +206,7 @@ func serve(state, bundle string, port int, noOpen bool) error {
 		return err
 	}
 	if !compatibleData(release, m) {
-		return errors.New("cluster data requires its original bundle; automatic upgrades are not supported in this MVP")
+		return errors.New("cluster data does not match the selected appliance; reset required: choose a new empty state directory (existing data is unchanged)")
 	}
 	_ = saveJSON(filepath.Join(state, "progress.json"), "Starting K3s and Kite…")
 	vm, err := bootVM(bundle, state, m)
@@ -262,7 +262,7 @@ func serve(state, bundle string, port int, noOpen bool) error {
 			}
 			return
 		}
-		if !(r.Method == "GET" && (name == "status" || name == "logs" || name == "cncm")) && !(r.Method == "POST" && name == "stop") {
+		if !(r.Method == "GET" && (name == "status" || name == "logs")) && !(r.Method == "POST" && name == "stop") {
 			http.NotFound(w, r)
 			return
 		}
