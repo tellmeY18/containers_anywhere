@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from components import APPLIANCES, RUNTIMES, PUBLISHER, semver, validate_descriptor, validate_lock
+from components import APPLIANCES, RUNTIMES, PUBLISHER, digest, fetch, semver, validate_descriptor, validate_lock
 from release import asset_names, build_component, verify_assets
 import package
 
@@ -40,6 +40,29 @@ class ComponentsTest(unittest.TestCase):
         lock["publisher"] = "untrusted/repo"
         with self.assertRaises(ValueError):
             validate_lock(lock)
+
+    def test_candidate_fetch_shares_hash_checks_but_cannot_be_promoted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifacts = root / "candidates"
+            artifacts.mkdir()
+            data = descriptor()
+            for name in APPLIANCES | RUNTIMES:
+                (artifacts / name).write_bytes(name.encode())
+                data["files"][name] = digest(artifacts / name)
+            dependency = {"tag": "appliance-v0.1.0", "release_id": 0, "descriptor": data}
+            lock = {"schema": 1, "publisher": PUBLISHER, "appliance": dependency, "runtime": dependency,
+                    "candidate": {"source": "a" * 40, "run_id": 123}}
+            with self.assertRaises(ValueError):
+                validate_lock(lock)
+            with patch("components.urllib.request.urlopen") as network:
+                fetch(lock, "linux", "amd64", root / "fetched", artifacts)
+                network.assert_not_called()
+            self.assertEqual((root / "fetched/appliance-amd64.tar.gz").read_bytes(),
+                             (artifacts / "appliance-amd64.tar.gz").read_bytes())
+            (artifacts / "runtime-linux-amd64.tar.gz").write_bytes(b"tampered")
+            with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+                fetch(lock, "linux", "amd64", root / "tampered", artifacts)
 
     def test_no_release_of_pr_legacy_or_unaccepted_run(self):
         run = {"conclusion": "success", "head_branch": "develop", "path": ".github/workflows/app.yml",

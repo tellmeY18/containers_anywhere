@@ -16,7 +16,7 @@ let
       ];
     };
     subPackages = [ "cmd/guest" ];
-    vendorHash = "sha256-LnhRtNunYUntDnrP9g7POtGablJbcrkK5eY2AOCcIfM=";
+    vendorHash = "sha256-tJ4oFvPra0/k7Pn5fmvNCBFWA3v6PXOwX2xNWUVpziQ=";
     env.CGO_ENABLED = "0";
     ldflags = [ "-s" "-w" ];
     doCheck = false;

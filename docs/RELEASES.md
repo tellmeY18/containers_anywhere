@@ -56,6 +56,15 @@ stages QEMU, and packages a test app for all four supported host targets.
 publisher release descriptors once into an immutable Actions dependency artifact.
 Every package job hashes downloaded bytes against that same lock.
 
+Before the first component publication, `appliance.yml` additionally locks its
+accepted, checksummed same-run artifacts and replays the app-only path across all
+four hosts, without Nix or QEMU staging. These candidate locks identify their
+source and Actions run and are explicitly rejected by release promotion.
+Candidate-artifact acceptance exercises the same pinning, packaging and selection
+logic but is **not actual published-dependency acceptance**: GitHub release
+descriptor resolution and first-run public downloads still require an approved
+published component. That gap must be recorded until a real tuple is accepted.
+
 Both paths run Go vet/race tests and build macOS ARM64, Linux AMD64/ARM64 and
 Windows AMD64 packages. Linux AMD64 KVM acceptance exercises Kite authentication,
 a PVC-backed workload, restart, replacement by an app with an unreachable different
@@ -91,7 +100,7 @@ gh workflow run release.yml --ref develop -f build_run_id=<run-id>
 
 Until the first independent appliance release is published, app-only builds have
 no published dependency to resolve. Validate initial candidates using the appliance
-workflow's test-app packages. Do not manufacture a public 0.1.0 dependency or reuse
+workflow's test-app packages and subsequent candidate-app reuse jobs. Do not manufacture a public 0.1.0 dependency or reuse
 an alpha tag to bypass the remaining release gates. An explicitly versioned
 prerelease can bootstrap this sequence only with separate publication approval.
 

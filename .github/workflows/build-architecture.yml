@@ -25,6 +25,10 @@ on:
         description: App builds download pinned published dependencies; never invoke Nix or stage QEMU.
         type: boolean
         default: false
+      candidate_artifacts:
+        description: CI-only reuse of this run's accepted artifacts; never release dependencies.
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -119,14 +123,28 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         if: inputs.reuse_appliance
         with:
-          name: dependencies
+          name: ${{ inputs.candidate_artifacts && 'candidate-dependencies' || 'dependencies' }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: inputs.candidate_artifacts
+        with:
+          name: appliance-${{ matrix.arch }}
+          path: dist/candidates
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: inputs.candidate_artifacts && matrix.platform != 'macos'
+        with:
+          name: package-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/candidates
       - name: Download exact released appliance and runtime
         if: inputs.reuse_appliance
         shell: bash
         env:
           PLATFORM: ${{ matrix.platform }}
           ARCH: ${{ matrix.arch }}
-        run: python scripts/components.py fetch --lock dependencies.json --platform "$PLATFORM" --arch "$ARCH" --output dist
+          CANDIDATE: ${{ inputs.candidate_artifacts }}
+        run: |
+          extra=()
+          if [ "$CANDIDATE" = true ]; then extra+=(--candidate-dir dist/candidates); fi
+          python scripts/components.py fetch --lock dependencies.json --platform "$PLATFORM" --arch "$ARCH" --output dist "${extra[@]}"
       - if: matrix.platform == 'linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends squashfs-tools libfuse2t64
       - if: matrix.platform == 'linux' && !inputs.reuse_appliance
@@ -225,11 +243,11 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: diagnostics-${{ matrix.platform }}-${{ matrix.arch }}
+          name: ${{ inputs.candidate_artifacts && 'candidate-app-' || '' }}diagnostics-${{ matrix.platform }}-${{ matrix.arch }}
           path: dist/smoke*/*.log
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: package-${{ matrix.platform }}-${{ matrix.arch }}
+          name: ${{ inputs.candidate_artifacts && 'candidate-app-' || '' }}package-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
             dist/releases/Containers-Anywhere-*
             dist/releases/runtime-*.tar.gz*
@@ -239,7 +257,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: matrix.platform == 'windows'
         with:
-          name: acceptance-launcher-windows-amd64
+          name: ${{ inputs.candidate_artifacts && 'candidate-app-' || '' }}acceptance-launcher-windows-amd64
           path: dist/releases/stage-windows-amd64/containers-anywhere/containers-anywhere.exe
           if-no-files-found: error
           retention-days: 14

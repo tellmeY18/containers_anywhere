@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import urllib.request
@@ -71,26 +72,40 @@ def resolve(tag):
         gh("release", "download", tag, "--repo", PUBLISHER, "--pattern", name, "--dir", tmp)
         data = json.loads((Path(tmp) / name).read_text())
     validate_descriptor(data, tag)
+    source = gh("api", f"repos/{PUBLISHER}/commits/{tag}", "--jq", ".sha")
+    if source != data["source"]:
+        raise ValueError("Component descriptor does not match its release tag")
     assets = {a["name"] for a in info["assets"]}
     if not set(data["files"]).issubset(assets):
         raise ValueError("Published component is missing assets")
     return {"tag": tag, "release_id": info["id"], "descriptor": data}
 
 
-def validate_lock(lock):
+def validate_lock(lock, allow_candidate=False):
     if lock.get("schema") != 1 or lock.get("publisher") != PUBLISHER:
         raise ValueError("Unsupported publisher or dependency lock")
+    candidate = lock.get("candidate")
+    if "candidate" in lock:
+        if (not allow_candidate or not isinstance(candidate, dict)
+                or not re.fullmatch(r"[0-9a-f]{40}", candidate.get("source", ""))
+                or not isinstance(candidate.get("run_id"), int) or candidate["run_id"] <= 0):
+            raise ValueError("Candidate artifacts cannot be promoted as published dependencies")
     for key in ("appliance", "runtime"):
         item = lock[key]
         if key == "appliance" and not item["tag"].startswith("appliance-v"):
             raise ValueError("Appliance selection must be an appliance release")
         validate_descriptor(item["descriptor"], item["tag"])
-        if not isinstance(item["release_id"], int) or item["release_id"] <= 0:
+        if candidate is not None and item["release_id"] == 0:
+            if item["descriptor"]["source"] != candidate["source"]:
+                raise ValueError("Mixed candidate sources")
+        elif not isinstance(item["release_id"], int) or item["release_id"] <= 0:
             raise ValueError("Missing immutable release identity")
 
 
-def fetch(lock, platform, arch, output):
-    validate_lock(lock)
+def fetch(lock, platform, arch, output, candidate_dir=None):
+    validate_lock(lock, allow_candidate=candidate_dir is not None)
+    if (candidate_dir is not None) != ("candidate" in lock):
+        raise ValueError("Candidate and published dependency paths must not be mixed")
     if f"{platform}-{arch}" not in PLATFORMS:
         raise ValueError("Unsupported host platform")
     output.mkdir(parents=True, exist_ok=True)
@@ -103,11 +118,15 @@ def fetch(lock, platform, arch, output):
         url = release_base(item["tag"]) + "/" + name
         # The publisher release descriptor is resolved once; all jobs consume
         # that same lock, and a changed asset fails its fixed hash.
-        with urllib.request.urlopen(url) as response, target.open("xb") as f:
-            if not response.url.startswith("https://"):
-                raise ValueError("Insecure component redirect")
-            while chunk := response.read(1 << 20):
-                f.write(chunk)
+        if candidate_dir is not None:
+            with (candidate_dir / name).open("rb") as source, target.open("xb") as dest:
+                shutil.copyfileobj(source, dest)
+        else:
+            with urllib.request.urlopen(url) as response, target.open("xb") as f:
+                if not response.url.startswith("https://"):
+                    raise ValueError("Insecure component redirect")
+                while chunk := response.read(1 << 20):
+                    f.write(chunk)
         if digest(target) != item["descriptor"]["files"][name]:
             raise ValueError("Component checksum mismatch: " + name)
 
@@ -124,6 +143,7 @@ def main():
     downloader.add_argument("--platform", required=True)
     downloader.add_argument("--arch", required=True)
     downloader.add_argument("--output", type=Path, required=True)
+    downloader.add_argument("--candidate-dir", type=Path, help="CI-only artifacts; forbidden in release promotion")
     args = parser.parse_args()
     if os.environ.get("GITHUB_REPOSITORY", PUBLISHER) != PUBLISHER:
         raise ValueError("Component releases must come from the approved publisher")
@@ -134,7 +154,7 @@ def main():
         validate_lock(lock)
         args.output.write_text(json.dumps(lock, indent=2) + "\n")
     else:
-        fetch(json.loads(args.lock.read_text()), args.platform, args.arch, args.output)
+        fetch(json.loads(args.lock.read_text()), args.platform, args.arch, args.output, args.candidate_dir)
 
 
 if __name__ == "__main__":
