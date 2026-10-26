@@ -5,8 +5,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 
 	"github.com/tellmeY18/containers_anywhere/internal/protocol"
 )
@@ -45,6 +49,7 @@ func fileHashMatches(path, want string) bool {
 	if err != nil || !info.Mode().IsRegular() {
 		return false
 	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return false
@@ -53,4 +58,34 @@ func fileHashMatches(path, want string) bool {
 	h := sha256.New()
 	_, err = io.Copy(h, f)
 	return err == nil && hex.EncodeToString(h.Sum(nil)) == want
+}
+
+func verifyRuntime(dir string) error {
+	b, err := os.ReadFile(filepath.Join(dir, "runtime.json"))
+	if err != nil {
+		return err
+	}
+	var files map[string]string
+	if err = json.Unmarshal(b, &files); err != nil {
+		return err
+	}
+	name := "qemu-system-x86_64"
+	if runtime.GOARCH == "arm64" {
+		name = "qemu-system-aarch64"
+	}
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	if files[name] == "" {
+		return fmt.Errorf("QEMU runtime missing checksum: %s", name)
+	}
+	for name, want := range files {
+		if !filepath.IsLocal(name) || strings.Contains(name, "\\") {
+			return fmt.Errorf("invalid QEMU runtime filename")
+		}
+		if !fileHashMatches(filepath.Join(dir, filepath.FromSlash(name)), want) {
+			return fmt.Errorf("QEMU checksum mismatch or non-regular member: %s", name)
+		}
+	}
+	return nil
 }

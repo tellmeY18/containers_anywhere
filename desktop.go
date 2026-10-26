@@ -123,7 +123,7 @@ func desktop(state, bundle string) error {
 	var childDone chan struct{}
 	phase, detail := "stopped", "Your cluster is stopped. Data stays on this computer."
 	setupRequired, restartRequired := false, pendingSetupRestart(state)
-	start := func() error {
+	start := func(activate bool) error {
 		mu.Lock()
 		defer mu.Unlock()
 		if child != nil {
@@ -148,7 +148,9 @@ func desktop(state, bundle string) error {
 			return err
 		}
 		args := []string{"serve", "--state", state, "--port", "0", "--no-open"}
-		if bundle != "" {
+		if activate {
+			args = []string{"update", "--operation", "activate", "--accept-external-effects", "--state", state, "--port", "0", "--no-open"}
+		} else if bundle != "" {
 			args = append(args, "--bundle", bundle)
 		}
 		cmd := exec.Command(exe, args...)
@@ -251,6 +253,11 @@ func desktop(state, bundle string) error {
 				}
 			}
 			w.Header().Set("Content-Type", "application/json")
+			if j, err := readUpdate(state); err == nil {
+				s["update"] = j
+			} else if !os.IsNotExist(err) {
+				s["updateError"] = err.Error()
+			}
 			json.NewEncoder(w).Encode(s)
 			return
 		}
@@ -317,7 +324,43 @@ func desktop(state, bundle string) error {
 			}
 			err = restartWindowsHost()
 		case "/start":
-			err = start()
+			err = start(false)
+		case "/update/prepare":
+			err = stop()
+			if err == nil {
+				mu.Lock()
+				phase, detail = "preparing update", "Verifying artifacts and retaining a cold local recovery point. This may take several minutes."
+				mu.Unlock()
+				err = runUpdate(state, "prepare", "", bundle, "", 0, true, false, false, false)
+				mu.Lock()
+				phase, detail = "stopped", "Update prepared. Review the risks before explicitly activating."
+				if err != nil {
+					phase, detail = "error", err.Error()
+				}
+				mu.Unlock()
+			}
+		case "/update/activate":
+			var acceptance struct {
+				Effects bool `json:"external_effects"`
+			}
+			if json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&acceptance) != nil || !acceptance.Effects {
+				err = errors.New("explicit acceptance of external writes and no automatic rollback is required")
+			} else {
+				err = start(true)
+			}
+		case "/update/commit":
+			body, readErr := io.ReadAll(io.LimitReader(r.Body, 4096))
+			if readErr != nil {
+				err = readErr
+				break
+			}
+			var cc control
+			cc, err = readControl(state)
+			if err == nil {
+				_, err = controlCall(cc, "POST", "/control/update/commit", body, 30*time.Second)
+			}
+		case "/update/cancel":
+			err = runUpdate(state, "cancel", "", "", "", 0, true, false, false, false)
 		case "/stop":
 			err = stop()
 		case "/quit":
@@ -343,7 +386,7 @@ func desktop(state, bundle string) error {
 	errs := make(chan error, 1)
 	go func() { errs <- srv.Serve(l) }()
 	_ = openURL(c.URL + "/#" + c.Token)
-	if err = start(); err != nil {
+	if err = start(false); err != nil {
 		mu.Lock()
 		phase, detail = "error", err.Error()
 		mu.Unlock()
@@ -376,10 +419,14 @@ const desktopHTML = `<!doctype html><html lang="en"><meta charset="utf-8"><meta 
 <a id="kite" hidden target="_blank" rel="noopener noreferrer">Open Kite</a><button id="start">Start / Retry</button><button id="stop">Stop cluster</button><button id="quit">Quit</button><button id="logs">Diagnostics</button>
 <p id="gateway-status" role="status"></p>
 <div id="workloads"></div>
+<p id="update-status" role="status"></p>
+<button id="update-prepare">Prepare appliance update</button><button id="update-activate" hidden>Activate / retry candidate</button><button id="update-commit" hidden>Commit validated update</button><button id="update-cancel" hidden>Cancel preparation</button>
 <button id="setup" hidden>Set up this computer</button><button id="restart" hidden>Restart Windows now</button>
 <p><small>The first launch downloads a verified VM and, on Linux/Windows, its QEMU runtime. Closing this tab keeps your cluster running. New workloads may require internet access.</small></p><pre id="output"></pre>
 <script>let token=location.hash.slice(1)||sessionStorage.getItem('token');if(token){sessionStorage.setItem('token',token);history.replaceState(null,'',location.pathname)}
-async function call(path,method='GET'){let r=await fetch('/'+path,{method,headers:{Authorization:'Bearer '+token}});let text=await r.text();if(!r.ok)throw Error(text);return text}
+async function call(path,method='GET',body){let r=await fetch('/'+path,{method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});let text=await r.text();if(!r.ok)throw Error(text);return text}
+function updateStatus(s){let p=s.update?.phase;document.getElementById('update-status').textContent=s.updateError|| (p?'Update: '+p+'. Recovery is local only. Candidate execution can write to external systems; no automatic disk rollback.':'App replacement retains the selected appliance. Appliance updates require explicit preparation and activation.');document.getElementById('update-activate').hidden=!['prepared','activating','candidate-running'].includes(p);document.getElementById('update-commit').hidden=p!=='candidate-running';document.getElementById('update-cancel').hidden=!['preparing','prepared'].includes(p)}
 function workloads(gateway){let box=document.getElementById('workloads');box.replaceChildren();for(let endpoint of gateway?.endpoints||[]){let row=document.createElement('p');if(endpoint.ready){let a=document.createElement('a');a.href=endpoint.url;a.textContent=endpoint.url;a.target='_blank';a.rel='noopener noreferrer';row.append(a);let note=document.createElement('small');note.textContent=endpoint.advertised?'mDNS announced; client reachability and CA trust need verification':'Responding on configured addresses; client DNS and CA trust need verification';row.append(note)}else{row.textContent=endpoint.url+' — '+(endpoint.error||'Checking workload')}box.append(row)}}
-let opened=false;async function poll(){try{let s=JSON.parse(await call('status'));document.getElementById('phase').textContent=s.phase;document.getElementById('detail').textContent=s.detail;document.getElementById('setup').hidden=!s.setupRequired;document.getElementById('restart').hidden=!s.restartRequired;document.getElementById('start').disabled=s.setupRequired||s.restartRequired||s.phase==='setup';document.getElementById('gateway-status').textContent=s.gateway?[s.gateway.error,s.gateway.processError,s.gateway.discoveryError].filter(Boolean).join(' · '):'';workloads(s.gateway);let a=document.getElementById('kite');a.hidden=!s.kiteURL;if(s.kiteURL){a.href=s.kiteURL;if(!opened){opened=true;document.title='Ready — Containers Anywhere'}}}catch(e){document.getElementById('detail').textContent=e.message}setTimeout(poll,2500)}
+let opened=false;async function poll(){try{let s=JSON.parse(await call('status'));updateStatus(s);document.getElementById('phase').textContent=s.phase;document.getElementById('detail').textContent=s.detail;document.getElementById('setup').hidden=!s.setupRequired;document.getElementById('restart').hidden=!s.restartRequired;document.getElementById('start').disabled=s.setupRequired||s.restartRequired||s.phase==='setup';document.getElementById('gateway-status').textContent=s.gateway?[s.gateway.error,s.gateway.processError,s.gateway.discoveryError].filter(Boolean).join(' · '):'';workloads(s.gateway);let a=document.getElementById('kite');a.hidden=!s.kiteURL;if(s.kiteURL){a.href=s.kiteURL;if(!opened){opened=true;document.title='Ready — Containers Anywhere'}}}catch(e){document.getElementById('detail').textContent=e.message}setTimeout(poll,2500)}
+for(let op of ['prepare','activate','commit','cancel'])document.getElementById('update-'+op).onclick=async()=>{let warnings={prepare:'Stop the cluster and prepare a local cold recovery point? This is not off-device protection.',activate:'Candidate workloads can execute cron, webhooks and external writes immediately. There is no isolation or automatic rollback. Activate or retry with the CURRENT disk?',commit:'Have you verified your workload data/PVC markers and credentials through this candidate? K3s/Kite health alone is insufficient.',cancel:'Cancel preparation without deleting retained evidence?'};if(!confirm(warnings[op]))return;try{document.getElementById('output').textContent=await call('update/'+op,'POST',{external_effects:op==='activate',workloads_validated:op==='commit'})}catch(e){document.getElementById('output').textContent=e.message}};
 for(let name of ['start','stop','quit','logs','setup','restart'])document.getElementById(name).onclick=async()=>{if(name==='restart'&&!confirm('Save your work first. Restart Windows now?'))return;try{let text=await call(name,name==='logs'?'GET':'POST');document.getElementById('output').textContent=text}catch(e){document.getElementById('output').textContent=e.message}};poll();</script></html>`

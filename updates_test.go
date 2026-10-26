@@ -14,6 +14,7 @@ func testBundle(t *testing.T) (string, manifest) {
 	dir := t.TempDir()
 	m := manifest{Product: "containers-anywhere", Version: "0.1.0", Arch: runtime.GOARCH, Format: 3, Protocol: 1, DataBytes: 16 << 30, Kernel: "kernel", Initrd: "initrd", System: "/nix/store/test", Files: map[string]string{}}
 	m.Capabilities = protocol.Capabilities()
+	m.DataContract, m.K3s, m.Kite = "var-lib-v1", "1.35.0+k3s1", "0.16.0"
 	for _, name := range []string{"kernel", "initrd", "system.img", "data.img"} {
 		b := []byte(name)
 		m.Files[name] = sha256Text(b)

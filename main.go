@@ -33,6 +33,9 @@ type manifest struct {
 	Format       int               `json:"format,omitempty"`
 	Protocol     int               `json:"protocol,omitempty"`
 	Capabilities []string          `json:"capabilities,omitempty"`
+	DataContract string            `json:"data_contract,omitempty"`
+	K3s          string            `json:"k3s,omitempty"`
+	Kite         string            `json:"kite,omitempty"`
 	DataBytes    int64             `json:"data_bytes,omitempty"`
 	hostRuntime  string
 }
@@ -71,6 +74,12 @@ func run() error {
 	file := fs.String("file", "", "encrypted backup file")
 	key := fs.String("key", "", "recovery identity file")
 	noOpen := fs.Bool("no-open", false, "do not open a browser")
+	operation := fs.String("operation", "status", "update operation: prepare, activate, commit, cancel, recover, status")
+	originalBundle := fs.String("original-bundle", "", "exact selected bundle for update recovery (default: verified cache)")
+	destination := fs.String("destination", "", "new empty recovery destination")
+	acceptEffects := fs.Bool("accept-external-effects", false, "acknowledge candidate workloads can make irreversible external writes; no automatic rollback")
+	acceptValidation := fs.Bool("accept-workload-validation", false, "attest workload/PVC contents and credentials were validated through the candidate")
+	acceptLoss := fs.Bool("accept-data-loss", false, "acknowledge cold recovery loses later writes and requires external side-effect reconciliation")
 	if err = fs.Parse(os.Args[2:]); err != nil {
 		return err
 	}
@@ -89,6 +98,8 @@ func run() error {
 		return backup(*state, *file)
 	case "restore":
 		return restore(*state, *file, *key)
+	case "update":
+		return runUpdate(*state, *operation, *bundle, *originalBundle, *destination, *port, *noOpen, *acceptEffects, *acceptValidation, *acceptLoss)
 	case "gateway-configure":
 		return configureGateway(*state, *file)
 	case "gateway-helper":
@@ -120,7 +131,7 @@ func run() error {
 		}
 		return err
 	default:
-		return errors.New("commands: desktop, serve, doctor, status, stop, logs, backup, restore, gateway-configure, gateway-status, demo-check")
+		return errors.New("commands: desktop, serve, doctor, status, stop, logs, backup, restore, update, gateway-configure, gateway-status, demo-check")
 	}
 }
 
@@ -150,6 +161,12 @@ func saveJSON(path string, v any) error {
 }
 
 func serve(state, bundle string, port int, noOpen bool) error {
+	return serveUpdate(state, bundle, port, noOpen, false)
+}
+
+var launchVM = bootVM
+
+func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 	if pendingSetupRestart(state) {
 		return errors.New("restart Windows to finish setup before starting the cluster")
 	}
@@ -169,6 +186,24 @@ func serve(state, bundle string, port int, noOpen bool) error {
 		return err
 	}
 	defer unlock()
+	if activate {
+		bundle, err = activateUpdate(state)
+		if err != nil {
+			return err
+		}
+	} else if err = checkUpdateStart(state); err != nil {
+		return err
+	}
+	retained := false
+	if bundle == "" {
+		if selected, readErr := readManifest(filepath.Join(state, "release.json")); readErr == nil {
+			bundle, err = retainedUpdateBundle(state, selected)
+			if err != nil {
+				return err
+			}
+			retained = bundle != ""
+		}
+	}
 	downloaded := bundle == ""
 	if bundle == "" {
 		bundle, err = bootstrap(state, func(detail string) {
@@ -195,6 +230,9 @@ func serve(state, bundle string, port int, noOpen bool) error {
 		return fmt.Errorf("bundle architecture %s does not match %s", m.Arch, runtime.GOARCH)
 	}
 	m.hostRuntime = filepath.Join(filepath.Dir(bundle), "qemu")
+	if activate || retained {
+		m.hostRuntime = filepath.Join(filepath.Dir(bundle), "original", "qemu")
+	}
 	if downloaded {
 		m.hostRuntime = filepath.Join(runtimeCache(state), "qemu")
 	}
@@ -209,7 +247,7 @@ func serve(state, bundle string, port int, noOpen bool) error {
 		return errors.New("cluster data does not match the selected appliance; reset required: choose a new empty state directory (existing data is unchanged)")
 	}
 	_ = saveJSON(filepath.Join(state, "progress.json"), "Starting K3s and Kite…")
-	vm, err := bootVM(bundle, state, m)
+	vm, err := launchVM(bundle, state, m)
 	if err != nil {
 		return err
 	}
@@ -253,6 +291,14 @@ func serve(state, bundle string, port int, noOpen bool) error {
 			return
 		}
 		name := strings.TrimPrefix(r.URL.Path, "/control/")
+		if name == "update/commit" && r.Method == "POST" {
+			if err := commitUpdate(state, client, r); err != nil {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			io.WriteString(w, "Candidate committed; local recovery point retained.\n")
+			return
+		}
 		if name == "gateway" && r.Method == "GET" {
 			w.Header().Set("Content-Type", "application/json")
 			if gateway == nil {

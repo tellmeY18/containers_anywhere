@@ -1,7 +1,10 @@
 # Disaster recovery architecture
 
-**Design status: proposed implementation contract.** Today only manual encrypted
-cold backups and empty-destination whole-appliance restore are implemented.
+**Design status: proposed implementation contract.** Manual encrypted cold backups,
+empty-destination whole-appliance restore, and the
+[explicit current-contract update transaction](UPDATES.md) are implemented in source.
+The update transaction adds a local cold recovery point and separate recovery export,
+not isolated validation or automatic rollback; platform acceptance remains gated.
 This document defines the path toward mission-critical durability, not a claim
 that the alpha already provides PITR, continuous backup or high availability.
 

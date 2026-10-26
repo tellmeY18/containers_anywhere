@@ -21,6 +21,14 @@
         let pkgs = nixpkgs.legacyPackages.${system};
         in {
           bundle = import ./nix/bundle.nix { inherit pkgs; guest = self.nixosConfigurations.${system}; };
+          # A real, distinct current-design root image for update acceptance.
+          # K3s/Kite and the data contract are deliberately unchanged.
+          bundle-update-drill = import ./nix/bundle.nix {
+            inherit pkgs;
+            guest = self.nixosConfigurations.${system}.extendModules {
+              modules = [{ environment.etc."containers-anywhere-update-drill".text = "candidate\n"; }];
+            };
+          };
           default = self.packages.${system}.bundle;
         });
     };

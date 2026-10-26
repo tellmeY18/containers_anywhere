@@ -89,6 +89,14 @@ prove business-level consistency and never overwrite the source workload.
 
 ## R4 — Host failure and safe upgrades
 
+Implemented in source, acceptance pending: [explicit current-contract updates](docs/UPDATES.md)
+with verified retained artifacts, capacity preflight, exclusive stop/lock, durable
+cold recovery, journaled activation, operator-validated commit and separate-directory
+recovery. No automatic rewind after candidate execution. Same K3s/Kite schema versions
+and an explicit data contract are required; migration support is not implied.
+The distinct-current-image KVM update drill and physical-platform acceptance are gates,
+not release-readiness claims.
+
 - Physical macOS, Windows WHPX and Linux ARM64 acceptance.
 - Power-loss, launcher crash, suspend/wake, network change, clock jump and
   low-storage testing; bounded diagnostics and guest storage-pressure reporting.

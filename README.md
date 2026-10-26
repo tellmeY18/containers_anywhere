@@ -53,7 +53,9 @@ Closing the browser keeps the VM running. Use **Stop cluster** or **Quit** in
 the control panel. Restart preserves your cluster, Kite account and local volumes.
 Changing defaults does not uninstall existing CNCM/CARE, delete their PVCs or
 secrets, or replace saved gateway grants. Existing data still requires its exact
-original appliance; this is not an in-place appliance migration.
+original appliance on ordinary startup. A separate, explicit
+[current-contract update operation](docs/UPDATES.md) can activate a verified
+candidate without silently replacing data.
 
 ### Platforms
 
@@ -161,7 +163,9 @@ The OS lock prevents backup while the VM is running. Existing backups and keys
 are never overwritten; restore requires an empty destination and authenticates
 the archive before publishing data. Store the generated `.key` separately.
 Restore needs the same architecture and **exact original appliance**. Retain the
-original launcher and bundle; this MVP refuses in-place appliance upgrades.
+original launcher and bundle. Explicit [appliance updates](docs/UPDATES.md) retain
+a local cold recovery point and require operator activation and workload validation.
+They do not provide automatic rollback or support arbitrary K3s/Kite migrations.
 
 ## Build and acceptance
 

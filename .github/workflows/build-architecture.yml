@@ -81,6 +81,19 @@ jobs:
           system=$(jq -r .system "$BUNDLE/manifest.json")
           nix path-info --recursive --json "$system" > "dist/closure-$ARCH.json"
           python3 scripts/appliance_report.py "$BUNDLE" "dist/appliance-$ARCH.tar.gz" "dist/closure-$ARCH.json" >> "$GITHUB_STEP_SUMMARY"
+      - name: Build distinct current-contract update drill appliance
+        if: inputs.arch == 'amd64'
+        run: |
+          candidate=$(nix build .#packages.x86_64-linux.bundle-update-drill --no-update-lock-file --out-link result-update-drill --print-out-paths)
+          python3 scripts/appliance.py "$candidate" dist/update-candidate-amd64.tar.gz
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: inputs.arch == 'amd64'
+        with:
+          name: update-candidate-amd64
+          path: dist/update-candidate-amd64.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: closure-${{ inputs.arch }}
@@ -199,6 +212,18 @@ jobs:
           extra=()
           if [ "$PUBLIC_DEPENDENCIES" = true ]; then extra+=(--download); fi
           python scripts/smoke.py --binary "$appdir/containers-anywhere" --replacement-binary "$appdir/replacement" --runtime-archive "$runtime" --bundle dist/acceptance/bundle --state dist/smoke --restore --gateway "${extra[@]}"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: matrix.platform == 'linux' && matrix.arch == 'amd64' && !inputs.reuse_appliance
+        with:
+          name: update-candidate-amd64
+          path: dist
+      - name: KVM explicit update, validation, restart and recovery export
+        if: matrix.platform == 'linux' && matrix.arch == 'amd64' && !inputs.reuse_appliance
+        run: |
+          mkdir -p dist/update-candidate/bundle
+          tar -xzf dist/update-candidate-amd64.tar.gz -C dist/update-candidate/bundle
+          python scripts/smoke.py --binary dist/releases/stage-linux-amd64/containers-anywhere/containers-anywhere \
+            --bundle dist/acceptance/bundle --state dist/smoke-update --gateway --update-bundle dist/update-candidate/bundle
       # Windows WHPX has no hosted runner, so replay its machine/CPU pair under
       # KVM. This checks the configuration WHPX depends on, not WHPX itself.
       - name: Linux KVM boot with the WHPX machine and CPU model

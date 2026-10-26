@@ -56,6 +56,7 @@ def main():
     parser.add_argument("--replacement-binary", type=Path, help="restart automatically with a different app recommendation")
     parser.add_argument("--runtime-archive", type=Path, help="exact QEMU archive pinned by the replacement app")
     parser.add_argument("--download", action="store_true", help="fresh boot through the packaged launcher's actual public download pins")
+    parser.add_argument("--update-bundle", type=Path, help="distinct current data-contract appliance for explicit KVM update/recovery drill")
     args = parser.parse_args()
     binary, bundle, state = args.binary.resolve(), args.bundle.resolve(), args.state.resolve()
     state.mkdir()  # Never use existing user data.
@@ -68,12 +69,15 @@ def main():
     marker = None
     timeout = int(os.environ.get("CONTAINERS_SMOKE_BOOT_SECONDS", "600"))
 
-    def boot(directory, fresh=False, replacement=False):
+    def boot(directory, fresh=False, replacement=False, update=False, automatic=False, recovery_bundle=None):
         label = "fresh" if fresh else "restart"
         log = (directory / (label + "-smoke.log")).open("w")
         selected_binary = args.replacement_binary.resolve() if replacement else binary
-        selected_bundle = None if replacement or (fresh and args.download) else bundle
+        selected_bundle = None if automatic or replacement or (fresh and args.download) else (recovery_bundle or bundle)
         command = launch_command(selected_binary, directory, selected_bundle)
+        if update:
+            command = [str(binary), "update", "--operation", "activate", "--accept-external-effects",
+                       "--state", str(directory), "--port", "0", "--no-open"]
         process = subprocess.Popen(command, stdout=log, stderr=log,
                                    env=dict(os.environ, CONTAINERS_NO_BROWSER="1"))
         c = None
@@ -187,6 +191,14 @@ def main():
             print("PASS: Kite auth, current protocol, generic workload/PVC and saved gateway grants", flush=True)
             if fresh and args.download:
                 print("PASS: actual public pinned appliance/runtime bootstrap into fresh state", flush=True)
+            if update:
+                # Login above verifies the original administrator; the HTTP
+                # marker verifies real PVC data, not only launcher/K3s health.
+                subprocess.run([str(binary), "update", "--operation", "commit",
+                                "--accept-workload-validation", "--state", str(directory)], check=True)
+                journal = json.loads((directory / "update.json").read_text())
+                assert journal["phase"] == "committed"
+                assert journal["validated_at"]
         finally:
             if c and process.poll() is None:
                 try:
@@ -225,6 +237,26 @@ def main():
         print("PASS: replacement app retains exact appliance, Kite identity and PVC with no appliance download", flush=True)
     else:
         boot(state)
+    if args.update_bundle:
+        candidate = args.update_bundle.resolve()
+        original_identity = json.loads((state / "release.json").read_text())
+        candidate_identity = json.loads((candidate / "manifest.json").read_text())
+        assert candidate_identity["system"] != original_identity["system"], "Update drill needs a distinct built root image"
+        subprocess.run([str(binary), "update", "--operation", "prepare", "--state", str(state),
+                        "--bundle", str(candidate), "--original-bundle", str(bundle)], check=True)
+        assert json.loads((state / "release.json").read_text()) == original_identity
+        boot(state, update=True)
+        assert json.loads((state / "release.json").read_text())["system"] == candidate_identity["system"]
+        boot(state, automatic=True)
+        recovered = state.parent / (state.name + "-recovered")
+        subprocess.run([str(binary), "update", "--operation", "recover", "--state", str(state),
+                        "--destination", str(recovered), "--accept-data-loss"], check=True)
+        # These are disposable acceptance workloads with no external services.
+        # Never automatically do this for arbitrary real workloads.
+        boot(recovered, recovery_bundle=recovered / "recovery/bundle")
+        assert json.loads((recovered / "release.json").read_text()) == original_identity
+        assert (state / "data.img").exists(), "Recovery removed current candidate data"
+        print("PASS: distinct current-contract update, explicit commit, restart and separate old-generation recovery preserve PVC, login and CA", flush=True)
     if args.restore:
         archive = state.parent / (state.name+".age")
         restored = state.parent / (state.name+"-restored")
