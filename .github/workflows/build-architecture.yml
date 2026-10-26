@@ -150,7 +150,7 @@ jobs:
       - if: matrix.platform == 'linux' && !inputs.reuse_appliance
         env:
           QEMU_PACKAGE: ${{ matrix.arch == 'amd64' && 'qemu-system-x86' || 'qemu-system-arm' }}
-        run: sudo apt-get install -y --no-install-recommends "$QEMU_PACKAGE"
+        run: sudo apt-get install -y --no-install-recommends "$QEMU_PACKAGE" ipxe-qemu
       - name: Package launcher with independent component pins
         shell: bash
         env:

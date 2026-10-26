@@ -173,6 +173,10 @@ def main():
             if console.exists():
                 (directory / (label + "-console.log")).write_bytes(console.read_bytes())
             log.close()
+            if process.poll() not in (None, 0):
+                for path in (directory / (label + "-smoke.log"), console):
+                    if path.exists():
+                        print(f"Launcher failure ({path.name}):\n{path.read_bytes()[-8192:].decode(errors='replace')}", flush=True)
         assert process.returncode == 0
 
     boot(state, fresh=True)
