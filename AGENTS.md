@@ -10,6 +10,12 @@ in ROADMAP.md. Planned recovery features must not be described as implemented.
   fresh 0.1.0 installs and independently released current app/appliance contracts.
   Retain integrity/security checks and non-destructive incompatible-data errors;
   require an explicit reset/new state directory, never delete data automatically.
+- Robust current-design updates are necessary and a priority for 0.1.0.
+  Preserve independent app/appliance updates, installed-component selection and
+  acceptance proving normal updates do not reset data. Do not confuse this with
+  obsolete alpha format shims or migration matrices. Production is planned for
+  v1.0.0; the user must explicitly declare stability before backward compatibility
+  becomes a requirement.
 - Small native Go host launcher, downloadable NixOS VM, single-node K3s and Kite.
 - macOS uses Virtualization.framework; Linux/Windows use downloaded, hash-verified
   QEMU with KVM/WHPX. No host Docker, Python, Nix or Node runtime dependencies.

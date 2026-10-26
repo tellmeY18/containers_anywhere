@@ -12,6 +12,13 @@ preservation drills. Existing data must still fail safely, without automatic
 deletion or migration. App/appliance independence applies to the current supported
 component contract, not an old-version support promise.
 
+Robust current-design update flow is necessary and a priority for 0.1.0, not
+optional backward-compatibility work. Installed-component selection and
+acceptance proving normal app replacement does not reset data remain here.
+Transactional appliance update implementation is a separate workstream; this PR
+does not replace it with a reset-only upgrade design. Production is planned for
+v1.0.0, and backward compatibility starts only when the user declares stability.
+
 The integrated `develop` defaults provision Kite, not CNCM/CARE, and use an
 explicitly configured workload gateway. The `care-mvp` branch is untouched.
 Networking publication APIs are being developed separately. Native host
@@ -28,7 +35,8 @@ and fully hashes that exact appliance in the local cache, without consulting
 the new recommendation. New downloads also record `appliance.json`, allowing
 re-download of the original pinned archive if its cache is lost.
 
-An unsupported protocol or capability set requires a fresh empty state directory;
+An unsupported protocol or capability set, without a supported update path,
+requires a fresh empty state directory;
 the launcher does not automatically delete old data. No alpha migration or backup
 compatibility acceptance is provided. Download receipts support the selected
 current appliance; they are not a recovery kit and are not included in backups.

@@ -15,6 +15,8 @@ Until explicitly declared stable, development targets fresh 0.1.0 installs and
 current independent component contracts, not backward compatibility or alpha
 migration. Unsupported data requires a new empty state directory; it is never
 automatically deleted.
+Robust current-design updates remain a 0.1.0 priority; app/appliance independence
+and normal-update data preservation are not excluded by that policy.
 
 [Download the alpha](https://github.com/tellmeY18/containers_anywhere/releases/tag/containers-v0.1.0-mvp.49)
 · [Recovery architecture](docs/DISASTER_RECOVERY.md)
