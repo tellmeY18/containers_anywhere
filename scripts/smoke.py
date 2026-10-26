@@ -187,8 +187,12 @@ def main():
                     status = json.loads(request(c["URL"]+"/control/gateway", c["Token"]))
                     return any(e["url"] == target and e["ready"] and not e["advertised"] for e in status.get("endpoints", []))
                 wait_for(publication_ready, process, timeout)
-                demo_command = ["curl", "--silent", "--show-error", "--fail", "--noproxy", "*", "--max-time", "20",
-                                "--resolve", "demo.local:18080:127.0.0.1", "http://demo.local:18080/"]
+                # The shipped demo is LocalCA: HTTPS verified against the persisted
+                # appliance root, and plain HTTP redirects to HTTPS.
+                demo_base = ["curl", "--silent", "--show-error", "--noproxy", "*", "--max-time", "20",
+                             "--resolve", "demo.local:18443:127.0.0.1", "--resolve", "demo.local:18080:127.0.0.1"]
+                demo_command = demo_base + ["--fail", "--cacert", str(root), "https://demo.local:18443/"]
+                redirect_command = demo_base + ["--output", os.devnull, "--write-out", "%{http_code} %{redirect_url}", "http://demo.local:18080/"]
                 last = []
 
                 def demo_ready():
@@ -201,6 +205,14 @@ def main():
                 except TimeoutError:
                     demo = last[0]
                     raise AssertionError(f"Preloaded demo did not traverse Caddy/Traefik: rc={demo.returncode} stdout={demo.stdout[:200]!r} stderr={demo.stderr[:200]!r}")
+                redirect = subprocess.run(redirect_command, capture_output=True)
+                assert redirect.returncode == 0 and redirect.stdout == b"308 https://demo.local:18443/", f"Demo HTTP did not redirect to HTTPS: {redirect.stdout!r} {redirect.stderr[:200]!r}"
+
+                def demo_status_ready():
+                    status = json.loads(request(c["URL"]+"/control/gateway", c["Token"]))
+                    demo = [e for e in status.get("endpoints", []) if e["url"] == "https://demo.local:18443/"]
+                    return demo and demo[0]["ready"] and demo[0]["certificateReady"]
+                wait_for(demo_status_ready, process, timeout)
                 nonlocal gateway_root
                 if gateway_root is None:
                     gateway_root = root.read_bytes()

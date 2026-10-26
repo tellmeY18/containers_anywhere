@@ -45,7 +45,9 @@ to already-published alpha 49. No optional application profile/catalog is shippe
 4. Once the cluster is ready, choose **Open Kite**, create an administrator and
    use the preconfigured `local` cluster. Fresh `develop` appliances do not install
    CNCM or CARE. Workload listeners default to `0.0.0.0` on 80/443, with a
-   permission-driven 8080/8443 fallback. The bundled demo advertises on the LAN.
+   permission-driven 8080/8443 fallback. The bundled demo advertises on the LAN
+   at `https://demo.local` (and `https://demo.localhost` on the host) using the
+   appliance's local CA, which clients must trust manually; HTTP redirects to HTTPS.
    Authorized workload service accounts manage routing, local TLS and mDNS via
    the [WorkloadPublication CRD](docs/NETWORKING.md), without host-panel grants.
 5. Install workloads through Kite's Helm management or YAML editor. HTTP GET
