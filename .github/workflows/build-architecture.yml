@@ -235,7 +235,7 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           export CONTAINERS_TEST_CADDY_CONFIG="$RUNNER_TEMP/caddy-config.json"
-          go test -run '^TestCaddyConfigHasNoPublicManagement$' .
+          go test -count=1 -run '^TestCaddyConfigHasNoPublicManagement$' .
           if [ "$PLATFORM" = macos ]; then
             helper="dist/releases/stage-macos-$ARCH/Containers Anywhere.app/Contents/MacOS/caddy"
           elif [ "$PLATFORM" = windows ]; then

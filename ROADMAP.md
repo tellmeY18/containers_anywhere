@@ -7,6 +7,10 @@ Pre-stability policy: until the user explicitly declares stability, prioritize
 fresh 0.1.0 and current component contracts. Do not implement or run backward
 compatibility, alpha migration matrices or legacy preservation drills. Retain
 integrity/security checks and non-destructive reset-required errors.
+Robust current-design update flow remains necessary and a 0.1.0 priority:
+independent component selection, normal-update data preservation, and transactional
+appliance updates are not obsolete backward-compatibility work. Production is
+planned for v1.0.0; stability must be explicitly declared by the user.
 
 ## Available: alpha foundation
 
