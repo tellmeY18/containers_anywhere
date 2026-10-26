@@ -6,14 +6,14 @@ import "slices"
 const Version = 1
 
 func Capabilities() []string {
-	return []string{"status", "logs", "stop", "kite-proxy", "gateway-v1"}
+	return []string{"status", "logs", "stop", "kite-proxy", "workload-publication-v1"}
 }
 
 func Supports(version int, capabilities []string) bool {
 	if version != Version {
 		return false
 	}
-	for _, required := range []string{"status", "logs", "stop", "kite-proxy"} {
+	for _, required := range Capabilities() {
 		if !slices.Contains(capabilities, required) {
 			return false
 		}

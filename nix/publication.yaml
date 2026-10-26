@@ -1,0 +1,150 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: workloadpublications.networking.containersanywhere.dev
+spec:
+  group: networking.containersanywhere.dev
+  scope: Namespaced
+  names:
+    plural: workloadpublications
+    singular: workloadpublication
+    kind: WorkloadPublication
+    shortNames: [wp]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Hostname
+          type: string
+          jsonPath: .spec.hostname
+        - name: URL
+          type: string
+          jsonPath: .status.url
+        - name: Ready
+          type: string
+          jsonPath: '.status.conditions[?(@.type=="Ready")].status'
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required: [ingressRef, hostname]
+              x-kubernetes-validations:
+                - rule: "!self.mdns || (self.lan && self.hostname.endsWith('.local'))"
+                  message: mDNS requires LAN and a .local hostname.
+              properties:
+                ingressRef:
+                  description: Name of an Ingress in this namespace; cross-namespace references are not supported.
+                  type: string
+                  maxLength: 63
+                  pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+                hostname:
+                  description: A hostname under <namespace>.local or <namespace>.localhost.
+                  type: string
+                  maxLength: 253
+                  pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$'
+                enabled:
+                  type: boolean
+                  default: true
+                lan:
+                  description: Permit remote workload requests; false restricts requests to loopback clients.
+                  type: boolean
+                  default: true
+                mdns:
+                  description: Advertise on private IPv4 LAN interfaces only after a successful workload probe.
+                  type: boolean
+                  default: false
+                tls:
+                  type: object
+                  default: {mode: LocalCA}
+                  required: [mode]
+                  properties:
+                    mode:
+                      description: LocalCA issues host-managed certificates and redirects HTTP. HTTP explicitly disables HTTPS workload access. Neither installs client trust.
+                      type: string
+                      enum: [LocalCA, HTTP]
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
+                url:
+                  type: string
+                conditions:
+                  type: array
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [type]
+                  items:
+                    type: object
+                    required: [type, status, reason, message, observedGeneration, lastTransitionTime]
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", Unknown]
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: containers-publication-ownership
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [networking.containersanywhere.dev]
+        apiVersions: [v1alpha1]
+        operations: [CREATE, UPDATE]
+        resources: [workloadpublications]
+  validations:
+    - expression: "!object.metadata.namespace.startsWith('kube-') && !(object.metadata.namespace in ['kite-system', 'containers-gateway'])"
+      message: Management namespaces cannot publish workloads.
+    - expression: "object.metadata.namespace == 'containers-demo' ? ((object.metadata.name == 'demo' && object.spec.hostname == 'demo.local') || (object.metadata.name == 'demo-localhost' && object.spec.hostname == 'demo.localhost')) : (object.spec.hostname.endsWith('.' + object.metadata.namespace + '.local') || object.spec.hostname.endsWith('.' + object.metadata.namespace + '.localhost'))"
+      message: Names must belong to this namespace; demo hostnames are reserved.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: containers-publication-ownership
+spec:
+  policyName: containers-publication-ownership
+  validationActions: [Deny]
+---
+# No binding is installed. Administrators explicitly bind this role to named
+# workload service accounts, in individual namespaces, using a RoleBinding.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: containers-workload-publisher
+rules:
+  - apiGroups: [networking.containersanywhere.dev]
+    resources: [workloadpublications]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list, watch, create, update, patch, delete]

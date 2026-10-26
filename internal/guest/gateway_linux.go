@@ -5,22 +5,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os/exec"
 	"sync"
 	"time"
+
+	"github.com/tellmeY18/containers_anywhere/internal/publication"
 )
 
 // Discovery is control-plane only. Clinical request bytes never go through
 // kubectl port-forward or the Kubernetes API server.
 type guestGateway struct {
-	mu       sync.RWMutex
-	address  string
-	snapshot []byte
+	mu           sync.RWMutex
+	address      string
+	publications publication.Controller
 }
 
 func (g *guestGateway) refresh(ctx context.Context) {
+	g.publications.Run = publication.Kubectl
 	for {
 		func() {
 			ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
@@ -50,17 +54,12 @@ func (g *guestGateway) refresh(ctx context.Context) {
 					}
 				}
 			}
-			b, err = exec.CommandContext(ctx, "k3s", "kubectl", "get", "ingresses", "-A", "-o", "json").Output()
-			if err == nil && len(b) <= 1<<20 {
-				g.mu.Lock()
-				g.snapshot = b
-				g.mu.Unlock()
-			} else {
-				g.mu.Lock()
-				g.snapshot = nil
-				g.mu.Unlock()
-			}
 		}()
+		reconcileCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+		if err := g.publications.Reconcile(reconcileCtx); err != nil {
+			log.Printf("publication reconciliation: %v", err)
+		}
+		cancel()
 		select {
 		case <-ctx.Done():
 			return
@@ -71,17 +70,7 @@ func (g *guestGateway) refresh(ctx context.Context) {
 
 func (g *guestGateway) routes(mux *http.ServeMux) {
 	connections := make(chan struct{}, 128)
-	mux.HandleFunc("GET /_agent/gateway/ingresses", func(w http.ResponseWriter, r *http.Request) {
-		g.mu.RLock()
-		b := g.snapshot
-		g.mu.RUnlock()
-		if b == nil {
-			http.Error(w, "Discovery unavailable", 503)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(b)
-	})
+	g.publications.Routes(mux)
 	mux.HandleFunc("CONNECT /_agent/gateway/connect", func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case connections <- struct{}{}:

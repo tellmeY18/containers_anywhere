@@ -13,37 +13,15 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/tellmeY18/containers_anywhere/internal/publication"
 )
 
-func TestGatewayPublicationBoundary(t *testing.T) {
-	c := gatewayConfig{Port: 8443, Namespaces: []string{"example"}, Domains: []string{"example.localhost"}}
-	if err := c.validate(); err != nil {
-		t.Fatal(err)
-	}
-	var snapshot gatewaySnapshot
-	err := json.Unmarshal([]byte(`{"items":[
-	{"metadata":{"namespace":"example"},"spec":{"ingressClassName":"containers-anywhere","rules":[{"host":"app.example.localhost"},{"host":"evil-example.localhost"},{"host":"*.example.localhost"}]}},
-	{"metadata":{"namespace":"other"},"spec":{"ingressClassName":"containers-anywhere","rules":[{"host":"app.example.localhost"}]}},
-	{"metadata":{"namespace":"example"},"spec":{"ingressClassName":"other","rules":[{"host":"ignored.example.localhost"}]}}
-	]}`), &snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := publishedHosts(c, snapshot); !reflect.DeepEqual(got, []string{"app.example.localhost"}) {
-		t.Fatal(got)
-	}
-	for _, host := range []string{"UPPER.example.localhost", "app.example.localhost:443", "app.example.localhost/", "127.0.0.1", "app..example.localhost", "app.example.localhost\n"} {
-		if c.allows(host, "example") {
-			t.Fatalf("accepted %q", host)
-		}
-	}
-	var parsed gatewayConfig
-	if err := decodeGatewayConfig([]byte(`{"port":8443,"bind":"0.0.0.0"}`), &parsed); err == nil {
-		t.Fatal("silently accepted unknown bind option")
-	}
+func testPublication(host string) publication.Record {
+	return publication.Record{Name: "web", Namespace: "example", UID: "test-id", Generation: 1, Revision: strings.Repeat("a", 64), Hostname: host, LAN: true, TLS: publication.TLS{Mode: "LocalCA"}}
 }
 
-func TestGatewayDefaultsAndExistingGrants(t *testing.T) {
+func TestGatewayDefaultsAndListenerConfig(t *testing.T) {
 	original := caddySHA256
 	caddySHA256 = "packaged"
 	t.Cleanup(func() { caddySHA256 = original })
@@ -52,33 +30,18 @@ func TestGatewayDefaultsAndExistingGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Port != 8443 || cfg.HTTPPort != 8080 || cfg.MDNS || !reflect.DeepEqual(cfg.Addresses, []string{"127.0.0.1"}) {
-		t.Fatalf("unsafe default: %+v", cfg)
+	if !((cfg.Port == 443 && cfg.HTTPPort == 80) || (cfg.Port == 8443 && cfg.HTTPPort == 8080)) || !reflect.DeepEqual(cfg.Addresses, []string{wildcardAddress}) {
+		t.Fatalf("wrong LAN defaults: %+v", cfg)
 	}
-	for _, tc := range []struct{ host, namespace string }{
-		{"cncm.cncm-system.local", "cncm-system"},
-		{"care.care.local", "care"},
-		{"app.example.local", "example"},
-	} {
-		if cfg.allows(tc.host, tc.namespace) {
-			t.Fatalf("implicitly granted %+v", tc)
-		}
-	}
-	if !cfg.allows("demo.local", "containers-demo") {
-		t.Fatal("missing default demo grant")
-	}
-	saved := []byte("{\n \"port\":443,\"httpPort\":80,\"addresses\":[\"0.0.0.0\"],\"mdns\":true,\n \"namespaces\":[\"cncm-system\",\"care\"],\"domains\":[\"cncm-system.local\",\"care.local\"]\n}\n")
+	saved := []byte("{\"port\":18443,\"httpPort\":18080,\"addresses\":[\"127.0.0.1\"]}\n")
 	path := filepath.Join(state, "gateway.json")
 	if err := os.WriteFile(path, saved, 0600); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
 		cfg, err = loadGatewayConfig(state)
-		if err != nil || !cfg.allows("cncm.cncm-system.local", "cncm-system") || !cfg.allows("care.care.local", "care") {
-			t.Fatalf("lost saved grant: %+v, %v", cfg, err)
-		}
-		if cfg.allows("demo.local", "containers-demo") {
-			t.Fatal("demo bypassed explicit grants")
+		if err != nil || cfg.Port != 18443 {
+			t.Fatalf("lost listener settings: %+v, %v", cfg, err)
 		}
 		after, err := os.ReadFile(path)
 		if err != nil || string(after) != string(saved) {
@@ -95,10 +58,17 @@ func TestGatewayDefaultsAndExistingGrants(t *testing.T) {
 	if string(after) != "{invalid" {
 		t.Fatal("overwrote invalid saved configuration")
 	}
+	for _, invalid := range []string{`{"port":443,"httpPort":80,"namespaces":["example"]}`, `{"port":443,"httpPort":80,"mdns":true}`, `{"port":443,"httpPort":80,"domains":["example.local"]}`} {
+		var cfg gatewayConfig
+		if decodeGatewayConfig([]byte(invalid), &cfg) == nil {
+			t.Fatal("accepted removed host publication authority")
+		}
+	}
 }
 
 func TestGatewayDiscoveryRetainsOnErrorAndAppliesDeletion(t *testing.T) {
-	g := &gateway{config: gatewayConfig{Namespaces: []string{"example"}, Domains: []string{"example.local"}}, hosts: []string{"app.example.local"}}
+	record := testPublication("app.example.local")
+	g := &gateway{publications: []publication.Record{record}, hosts: []string{"app.example.local"}}
 	code, body := 503, ""
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(code)
@@ -113,6 +83,13 @@ func TestGatewayDiscoveryRetainsOnErrorAndAppliesDeletion(t *testing.T) {
 	if !g.permits("app.example.local") || g.err == "" {
 		t.Fatal("transient failure lost approved hosts or hid error")
 	}
+	for _, invalid := range []string{`{}`, `{"items":null}`, `{"items":[{"hostname":"evil.local"}]}`, `{"items":[]} {}`} {
+		code, body = 200, invalid
+		g.refresh(context.Background(), client)
+		if !g.permits(record.Hostname) || g.err == "" {
+			t.Fatal("invalid snapshot replaced last valid state")
+		}
+	}
 	code, body = 200, `{"items":[]}`
 	g.refresh(context.Background(), client)
 	if g.permits("app.example.local") || g.err != "" {
@@ -121,7 +98,7 @@ func TestGatewayDiscoveryRetainsOnErrorAndAppliesDeletion(t *testing.T) {
 }
 
 func TestGatewayBridgeDoesNotExposeControl(t *testing.T) {
-	g := &gateway{hosts: []string{"app.example.localhost"}}
+	g := &gateway{hosts: []string{"app.example.localhost"}, publications: []publication.Record{testPublication("app.example.localhost")}}
 	called := false
 	h := g.bridgeHandler("secret", "127.0.0.1:1234", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true; w.WriteHeader(204) }))
 	for _, tc := range []struct {
@@ -144,6 +121,42 @@ func TestGatewayBridgeDoesNotExposeControl(t *testing.T) {
 			t.Fatalf("%+v: status=%d called=%t", tc, w.Code, called)
 		}
 	}
+}
+
+func TestPublicationLANAndTLSControls(t *testing.T) {
+	record := testPublication("app.example.local")
+	record.LAN = false
+	g := &gateway{config: gatewayConfig{Port: 8443, HTTPPort: 8080}, publications: []publication.Record{record}}
+	h := g.bridgeHandler("secret", "127.0.0.1:1234", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != record.Hostname || r.Header.Get("X-Forwarded-Host") != record.Hostname {
+			t.Error("lost workload host")
+		}
+		w.WriteHeader(204)
+	}))
+	check := func(ip, scheme string, want int) {
+		t.Helper()
+		r := httptest.NewRequest("GET", "http://"+record.Hostname+"/", nil)
+		r.Header.Set("X-CA-Gateway", "secret")
+		r.Header.Set("X-Forwarded-For", ip)
+		r.Header.Set("X-Forwarded-Proto", scheme)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s: %d != %d", ip, scheme, w.Code, want)
+		}
+	}
+	check("127.0.0.1", "https", 204)
+	check("192.168.1.5", "https", 403)
+	check("127.0.0.1, 192.168.1.5", "https", 403)
+	check("", "https", 403)
+	check("127.0.0.1", "http", 308)
+	g.publications[0].TLS.Mode = "HTTP"
+	check("127.0.0.1", "http", 204)
+	check("127.0.0.1", "https", 403)
+	g.publications[0].LAN = true
+	check("192.168.1.5", "http", 204)
+	g.publications = nil
+	check("127.0.0.1", "http", 403)
 }
 
 func TestCaddyConfigHasNoPublicManagement(t *testing.T) {
@@ -202,7 +215,7 @@ func TestGatewayIdentityBackupRoundTrip(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(state, "data.img"), []byte("disk"), 0600)
 	saveJSON(filepath.Join(state, "release.json"), manifest{Arch: runtime.GOARCH, Version: "test"})
-	saveJSON(filepath.Join(state, "gateway.json"), gatewayConfig{Port: 8443, Namespaces: []string{"example"}, Domains: []string{"example.localhost"}})
+	saveJSON(filepath.Join(state, "gateway.json"), gatewayConfig{Port: 8443, HTTPPort: 8080})
 	archive := filepath.Join(root, "backup.age")
 	if err := backup(state, archive); err != nil {
 		t.Fatal(err)
