@@ -1,0 +1,99 @@
+name: Build and accept appliance
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'APPLIANCE_VERSION'
+      - 'flake.*'
+      - 'nix/**'
+      - 'cmd/guest/**'
+      - 'internal/guest/**'
+      - 'internal/boottls/**'
+      - 'internal/protocol/**'
+      - 'internal/atomicfile/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'scripts/**'
+      - '.github/workflows/appliance.yml'
+      - '.github/workflows/build-architecture.yml'
+permissions:
+  contents: read
+concurrency:
+  group: appliance-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  versions:
+    runs-on: ubuntu-24.04
+    outputs:
+      app: ${{ steps.version.outputs.app }}
+      appliance: ${{ steps.version.outputs.appliance }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - id: version
+        run: |
+          python3 -c 'import sys; sys.path.insert(0, "scripts"); from components import semver; from pathlib import Path; [semver(Path(p).read_text().strip()) for p in ("VERSION", "APPLIANCE_VERSION")]'
+          echo "app=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+          echo "appliance=$(cat APPLIANCE_VERSION)" >> "$GITHUB_OUTPUT"
+  amd64:
+    needs: versions
+    uses: ./.github/workflows/build-architecture.yml
+    with:
+      arch: amd64
+      system: x86_64-linux
+      runner: ubuntu-24.04
+      packages: '{"include":[{"runner":"ubuntu-24.04","platform":"linux","arch":"amd64"},{"runner":"windows-2025","platform":"windows","arch":"amd64"}]}'
+      version: ${{ needs.versions.outputs.app }}
+      appliance_version: ${{ needs.versions.outputs.appliance }}
+  arm64:
+    needs: versions
+    uses: ./.github/workflows/build-architecture.yml
+    with:
+      arch: arm64
+      system: aarch64-linux
+      runner: ubuntu-24.04-arm
+      packages: '{"include":[{"runner":"ubuntu-24.04-arm","platform":"linux","arch":"arm64"},{"runner":"macos-latest","platform":"macos","arch":"arm64"}]}'
+      version: ${{ needs.versions.outputs.app }}
+      appliance_version: ${{ needs.versions.outputs.appliance }}
+  candidate-dependencies:
+    needs: [amd64, arm64]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: appliance-*
+          merge-multiple: true
+          path: dist/candidates
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: package-*
+          merge-multiple: true
+          path: dist/candidates
+      - run: python3 scripts/candidate.py --artifacts dist/candidates --output dependencies.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: candidate-dependencies
+          path: dependencies.json
+          if-no-files-found: error
+  candidate-app-amd64:
+    needs: [versions, candidate-dependencies]
+    uses: ./.github/workflows/build-architecture.yml
+    with:
+      arch: amd64
+      system: x86_64-linux
+      runner: ubuntu-24.04
+      packages: '{"include":[{"runner":"ubuntu-24.04","platform":"linux","arch":"amd64"},{"runner":"windows-2025","platform":"windows","arch":"amd64"}]}'
+      version: ${{ needs.versions.outputs.app }}
+      reuse_appliance: true
+      candidate_artifacts: true
+  candidate-app-arm64:
+    needs: [versions, candidate-dependencies]
+    uses: ./.github/workflows/build-architecture.yml
+    with:
+      arch: arm64
+      system: aarch64-linux
+      runner: ubuntu-24.04-arm
+      packages: '{"include":[{"runner":"ubuntu-24.04-arm","platform":"linux","arch":"arm64"},{"runner":"macos-latest","platform":"macos","arch":"arm64"}]}'
+      version: ${{ needs.versions.outputs.app }}
+      reuse_appliance: true
+      candidate_artifacts: true

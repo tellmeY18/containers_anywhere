@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Boot a disposable VM; exercise Kite, a real workload, restart and cold restore."""
 import argparse
-import base64
+import hashlib
 import http.cookiejar
 import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import subprocess
 import time
 import urllib.error
@@ -38,6 +39,13 @@ def wait_for(fn, process, seconds=600):
     raise TimeoutError(f"Appliance did not become ready: {error}")
 
 
+def launch_command(binary, state, bundle=None):
+    command = [str(binary), "serve", "--state", str(state), "--port", "0", "--no-open"]
+    if bundle is not None:
+        command += ["--bundle", str(bundle)]
+    return command
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
@@ -45,29 +53,44 @@ def main():
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--restore", action="store_true")
     parser.add_argument("--gateway", action="store_true", help="accept packaged Caddy and preloaded Traefik")
+    parser.add_argument("--replacement-binary", type=Path, help="restart automatically with a different app recommendation")
+    parser.add_argument("--runtime-archive", type=Path, help="exact QEMU archive pinned by the replacement app")
+    parser.add_argument("--download", action="store_true", help="fresh boot through the packaged launcher's actual public download pins")
     args = parser.parse_args()
     binary, bundle, state = args.binary.resolve(), args.bundle.resolve(), args.state.resolve()
     state.mkdir()  # Never use existing user data.
     gateway_root = None
     gateway_config = json.dumps({"port": 18443, "httpPort": 18080,
-                                "namespaces": ["default", "containers-demo", "cncm-system", "care"],
-                                "domains": ["default.localhost", "demo.local", "demo.localhost", "cncm-system.local", "care.local"]}).encode()
+                                "namespaces": ["default", "containers-demo"],
+                                "domains": ["default.localhost", "demo.local", "demo.localhost"]}).encode()
     (state / "gateway.json").write_bytes(gateway_config)
-    preserved = {}
-    legacy_token = base64.b64encode(secrets.token_bytes(32)).decode()
     admin = {"username": "mvptest", "password": secrets.token_urlsafe(24), "enableAnalytics": False}
     marker = None
     timeout = int(os.environ.get("CONTAINERS_SMOKE_BOOT_SECONDS", "600"))
 
-    def boot(directory, fresh=False):
+    def boot(directory, fresh=False, replacement=False):
         label = "fresh" if fresh else "restart"
         log = (directory / (label + "-smoke.log")).open("w")
-        process = subprocess.Popen([str(binary), "serve", "--state", str(directory), "--bundle", str(bundle), "--port", "0", "--no-open"], stdout=log, stderr=log,
+        selected_binary = args.replacement_binary.resolve() if replacement else binary
+        selected_bundle = None if replacement or (fresh and args.download) else bundle
+        command = launch_command(selected_binary, directory, selected_bundle)
+        process = subprocess.Popen(command, stdout=log, stderr=log,
                                    env=dict(os.environ, CONTAINERS_NO_BROWSER="1"))
         c = None
         try:
             c = wait_for(lambda: json.loads((directory / "control.json").read_text()), process, timeout)
-            wait_for(lambda: json.loads(request(c["URL"]+"/control/status", c["Token"])).get("healthy"), process, timeout)
+            if fresh and args.download:
+                selected = json.loads((directory / "release.json").read_text())
+                expected = json.loads((bundle / "manifest.json").read_text())
+                for key, value in selected.items():
+                    assert expected.get(key) == value, f"Public bootstrap selected the wrong appliance: {key}"
+                assert (directory / "appliance.json").is_file(), "Public bootstrap did not persist its download receipt"
+            def ready():
+                status = json.loads(request(c["URL"]+"/control/status", c["Token"]))
+                assert status["protocol"] == 1
+                assert {"status", "logs", "stop", "kite-proxy"}.issubset(status["capabilities"])
+                return status.get("healthy")
+            wait_for(ready, process, timeout)
             try:
                 request(c["AppURL"]+"/api/v1/bootstrap")
                 raise AssertionError("Kite bootstrap exposed without host capability")
@@ -87,14 +110,6 @@ def main():
                         raise AssertionError(f"Fresh universal appliance preinstalled {namespace}")
                     except urllib.error.HTTPError as e:
                         assert e.code == 404, f"Cannot inspect fresh namespaces: {e}"
-                    # Synthetic legacy-named objects catch name-specific cleanup;
-                    # this is not an actual CNCM/CARE application migration test.
-                    for resource in [
-                        {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": namespace}},
-                        {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "preserve-me", "namespace": namespace},
-                         "data": {"token": legacy_token}},
-                    ]:
-                        request(c["AppURL"]+"/api/v1/resources/apply", data={"yaml": json.dumps(resource), "namespace": namespace}, opener=browser)
                 # This is a real additional workload, with a PVC whose contents
                 # must survive both reboot and an encrypted backup round trip.
                 resources = [
@@ -117,16 +132,6 @@ def main():
                     ingress = {"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": {"name": "mvp-web", "namespace": "default"},
                                "spec": {"ingressClassName": "containers-anywhere", "rules": [{"host": "app.default.localhost", "http": {"paths": [{"path": "/", "pathType": "Prefix", "backend": {"service": {"name": "mvp-web", "port": {"number": 8080}}}}]}}]}}
                     request(c["AppURL"]+"/api/v1/resources/apply", data={"yaml": json.dumps(ingress), "namespace": "default"}, opener=browser)
-            for namespace in ["cncm-system", "care"]:
-                for path in ["/namespaces/_all/"+namespace, "/secrets/"+namespace+"/preserve-me"]:
-                    resource = json.loads(request(c["AppURL"]+"/api/v1"+path, opener=browser))
-                    identity = (resource["metadata"]["uid"], resource.get("data"))
-                    if fresh:
-                        preserved[path] = identity
-                    else:
-                        assert identity == preserved[path], f"Existing object was replaced or reset: {path}"
-                    if "data" in resource:
-                        assert resource["data"]["token"] == legacy_token, "Existing secret changed"
             assert (directory / "gateway.json").read_bytes() == gateway_config, "Saved gateway grants were overwritten"
             nonlocal marker
             observed = wait_for(lambda: request(c["AppURL"]+"/api/v1/namespaces/default/services/mvp-web:8080/proxy/", opener=browser), process, timeout)
@@ -179,7 +184,9 @@ def main():
                     result = subprocess.run(base + ["--cacert", str(root), target.rstrip("/")+path], capture_output=True)
                     assert result.returncode != 0, "Workload gateway exposed appliance management"
                 print("PASS: Caddy trusted HTTPS, Traefik Ingress, management isolation and persistent CA", flush=True)
-            print("PASS: Kite auth, generic workload/PVC, legacy-named namespace/secret identities and saved gateway grants", flush=True)
+            print("PASS: Kite auth, current protocol, generic workload/PVC and saved gateway grants", flush=True)
+            if fresh and args.download:
+                print("PASS: actual public pinned appliance/runtime bootstrap into fresh state", flush=True)
         finally:
             if c and process.poll() is None:
                 try:
@@ -195,10 +202,29 @@ def main():
             if console.exists():
                 (directory / (label + "-console.log")).write_bytes(console.read_bytes())
             log.close()
+            if process.poll() not in (None, 0):
+                for path in (directory / (label + "-smoke.log"), console):
+                    if path.exists():
+                        print(f"Launcher failure ({path.name}):\n{path.read_bytes()[-8192:].decode(errors='replace')}", flush=True)
         assert process.returncode == 0
 
     boot(state, fresh=True)
-    boot(state)
+    if args.replacement_binary:
+        if not args.runtime_archive:
+            raise ValueError("Replacement acceptance needs its exact runtime archive")
+        original = (state / "release.json").read_bytes()
+        shutil.copytree(bundle, state / "appliances/acceptance/bundle", copy_function=os.link)
+        with args.runtime_archive.open("rb") as f:
+            runtime_sha = hashlib.file_digest(f, "sha256").hexdigest()
+        if not args.download:
+            runtime = state / "runtimes" / runtime_sha / "qemu"
+            shutil.copytree(bundle.parent / "qemu", runtime, copy_function=os.link)
+            (runtime / ".archive-sha256").write_text(runtime_sha)
+        boot(state, replacement=True)
+        assert (state / "release.json").read_bytes() == original, "App replacement changed appliance identity"
+        print("PASS: replacement app retains exact appliance, Kite identity and PVC with no appliance download", flush=True)
+    else:
+        boot(state)
     if args.restore:
         archive = state.parent / (state.name+".age")
         restored = state.parent / (state.name+"-restored")

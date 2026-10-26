@@ -17,6 +17,25 @@ def download(url, dest, digest, algorithm="sha256"):
             raise ValueError(f"Checksum mismatch: {url}")
 
 
+def stage_linux_firmware(dest, arch, source=Path("/")):
+    firmware = dest / "share/qemu"
+    shutil.copytree(source / "usr/share/qemu", firmware, symlinks=False)
+    licenses = dest / "licenses"
+    licenses.mkdir(exist_ok=True)
+    # QEMU's distro search path includes these directories even with -L set.
+    # Include them explicitly so a builder's host installation cannot hide a
+    # missing firmware dependency in the downloadable runtime.
+    for directory, package in [("usr/share/seabios", "seabios"), ("usr/lib/ipxe/qemu", "ipxe-qemu")]:
+        path = source / directory
+        if path.exists():
+            shutil.copytree(path, firmware, dirs_exist_ok=True, symlinks=False)
+            shutil.copy2(source / "usr/share/doc" / package / "copyright", licenses / (package + ".copyright"))
+    if arch == "amd64":
+        for name in ("bios-256k.bin", "efi-virtio.rom"):
+            if not (firmware / name).is_file():
+                raise ValueError("Incomplete standalone QEMU firmware: " + name)
+
+
 def stage_runtime(dest, arch):
     dest.mkdir()
     if os.name == "nt":
@@ -49,10 +68,8 @@ def stage_runtime(dest, arch):
             '#!/bin/sh\nHERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n'
             f'exec "$HERE/lib/{loader.name}" --library-path "$HERE/lib" "$HERE/qemu" "$@"\n')
         (dest / name).chmod(0o755)
-        shutil.copytree("/usr/share/qemu", dest / "share/qemu", symlinks=False)
-        if Path("/usr/share/seabios").exists():
-            shutil.copytree("/usr/share/seabios", dest / "share/qemu", dirs_exist_ok=True)
         shutil.copytree("/usr/share/doc/qemu-system-common", dest / "licenses", symlinks=False)
+        stage_linux_firmware(dest, arch)
         for path in re.findall(r"(/[^\s()]+)", output):
             result = subprocess.run(["dpkg-query", "-S", path], capture_output=True, text=True)
             if result.returncode == 0:

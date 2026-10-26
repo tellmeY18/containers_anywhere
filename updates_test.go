@@ -5,12 +5,15 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/tellmeY18/containers_anywhere/internal/protocol"
 )
 
 func testBundle(t *testing.T) (string, manifest) {
 	t.Helper()
 	dir := t.TempDir()
 	m := manifest{Product: "containers-anywhere", Version: "0.1.0", Arch: runtime.GOARCH, Format: 3, Protocol: 1, DataBytes: 16 << 30, Kernel: "kernel", Initrd: "initrd", System: "/nix/store/test", Files: map[string]string{}}
+	m.Capabilities = protocol.Capabilities()
 	for _, name := range []string{"kernel", "initrd", "system.img", "data.img"} {
 		b := []byte(name)
 		m.Files[name] = sha256Text(b)
@@ -32,6 +35,8 @@ func TestApplianceContracts(t *testing.T) {
 	for _, mutate := range []func(*manifest){
 		func(m *manifest) { m.Format = 2 }, func(m *manifest) { m.Product = "care" },
 		func(m *manifest) { m.Protocol++ }, func(m *manifest) { m.DataBytes = -1 },
+		func(m *manifest) { m.Capabilities = []string{"status"} },
+		func(m *manifest) { m.Capabilities = nil },
 	} {
 		next := m
 		mutate(&next)
@@ -46,6 +51,14 @@ func TestApplianceContracts(t *testing.T) {
 	next.System = "/nix/store/new"
 	if compatibleData(m, next) {
 		t.Fatal("silently upgraded cluster")
+	}
+	next = m
+	next.Version = "0.1.99"
+	if err := validateLayers(next); err != nil {
+		t.Fatal("protocol-compatible patch appliance rejected:", err)
+	}
+	if compatibleData(m, next) {
+		t.Fatal("protocol compatibility must not authorize a disk migration")
 	}
 	if err := os.WriteFile(filepath.Join(dir, "system.img"), []byte("tampered"), 0600); err != nil {
 		t.Fatal(err)

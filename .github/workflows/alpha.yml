@@ -1,8 +1,8 @@
-name: Build Containers Anywhere MVP
+name: Source checks
 on:
   workflow_dispatch:
   push:
-    branches: [develop, care-mvp]
+    branches: [develop]
   pull_request:
 permissions:
   contents: read
@@ -12,35 +12,11 @@ concurrency:
 jobs:
   checks:
     runs-on: ubuntu-24.04
-    outputs:
-      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: go.mod
-      - run: test -z "$(gofmt -l ./*.go)" && go vet ./... && go test -race ./...
+      - run: test -z "$(gofmt -l $(git ls-files '*.go'))" && go vet ./... && go test -race ./...
       - run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/containers-anywhere.exe .
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
-      - id: version
-        run: echo "version=$(cat VERSION)-mvp.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
-  amd64:
-    if: github.event_name != 'pull_request'
-    needs: checks
-    uses: ./.github/workflows/build-architecture.yml
-    with:
-      arch: amd64
-      system: x86_64-linux
-      runner: ubuntu-24.04
-      packages: '{"include":[{"runner":"ubuntu-24.04","platform":"linux","arch":"amd64"},{"runner":"windows-2025","platform":"windows","arch":"amd64"}]}'
-      version: ${{ needs.checks.outputs.version }}
-  arm64:
-    if: github.event_name != 'pull_request'
-    needs: checks
-    uses: ./.github/workflows/build-architecture.yml
-    with:
-      arch: arm64
-      system: aarch64-linux
-      runner: ubuntu-24.04-arm
-      packages: '{"include":[{"runner":"ubuntu-24.04-arm","platform":"linux","arch":"arm64"},{"runner":"macos-latest","platform":"macos","arch":"arm64"}]}'
-      version: ${{ needs.checks.outputs.version }}

@@ -18,10 +18,22 @@ on:
       version:
         required: true
         type: string
+      appliance_version:
+        type: string
+        default: ''
+      reuse_appliance:
+        description: App builds download pinned published dependencies; never invoke Nix or stage QEMU.
+        type: boolean
+        default: false
+      candidate_artifacts:
+        description: CI-only reuse of this run's accepted artifacts; never release dependencies.
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
   appliance:
+    if: ${{ !inputs.reuse_appliance }}
     name: appliance-${{ inputs.arch }}
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 180
@@ -30,11 +42,22 @@ jobs:
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
       - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
         with:
-          primary-key: ca-nix-v2-${{ inputs.system }}-${{ hashFiles('flake.nix', 'flake.lock', 'nix/**', '**/*.go', 'go.mod', 'go.sum', '.github/workflows/build-architecture.yml') }}
+          primary-key: ca-nix-v3-${{ inputs.system }}-${{ hashFiles('APPLIANCE_VERSION', 'flake.nix', 'flake.lock', 'nix/**', 'cmd/guest/**', 'internal/guest/**', 'internal/boottls/**', 'internal/protocol/**', 'internal/atomicfile/**', 'go.mod', 'go.sum') }}
           restore-prefixes-first-match: |
+            ca-nix-v3-${{ inputs.system }}-
             ca-nix-v2-${{ inputs.system }}-
             ca-nix-${{ inputs.system }}-
           gc-max-store-size-linux: 6000000000
+      - name: Prove host-only edits do not change the guest derivation
+        env:
+          SYSTEM: ${{ inputs.system }}
+        run: |
+          before=$(nix eval --raw ".#packages.$SYSTEM.bundle.drvPath" --no-update-lock-file)
+          cp main.go "$RUNNER_TEMP/host-input-main.go"
+          printf '\n// Host-only input independence probe.\n' >> main.go
+          after=$(nix eval --raw ".#packages.$SYSTEM.bundle.drvPath" --no-update-lock-file)
+          mv "$RUNNER_TEMP/host-input-main.go" main.go
+          test "$before" = "$after"
       - name: Build preloaded K3s and Kite appliance
         id: build
         env:
@@ -73,6 +96,7 @@ jobs:
           retention-days: 14
   package:
     needs: appliance
+    if: ${{ always() && !cancelled() && (needs.appliance.result == 'success' || (inputs.reuse_appliance && needs.appliance.result == 'skipped')) }}
     name: package-${{ matrix.platform }}-${{ matrix.arch }}
     strategy:
       fail-fast: false
@@ -90,31 +114,91 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.13'
-      - run: go test -race ./...
+      - run: go vet ./... && go test -race ./...
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: ${{ !inputs.reuse_appliance }}
         with:
           name: appliance-${{ matrix.arch }}
           path: dist
-      - if: matrix.platform == 'linux'
-        env:
-          QEMU_PACKAGE: ${{ matrix.arch == 'amd64' && 'qemu-system-x86' || 'qemu-system-arm' }}
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends "$QEMU_PACKAGE" squashfs-tools libfuse2t64
-      - name: Package launcher and separate runtime
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: inputs.reuse_appliance
+        with:
+          name: ${{ inputs.candidate_artifacts && 'candidate-dependencies' || 'dependencies' }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: inputs.candidate_artifacts
+        with:
+          name: appliance-${{ matrix.arch }}
+          path: dist/candidates
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: inputs.candidate_artifacts && matrix.platform != 'macos'
+        with:
+          name: package-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/candidates
+      - name: Download exact released appliance and runtime
+        if: inputs.reuse_appliance
         shell: bash
         env:
           PLATFORM: ${{ matrix.platform }}
           ARCH: ${{ matrix.arch }}
-        run: python scripts/package.py "$PLATFORM" --arch "$ARCH" --version "$VERSION" --appliance "dist/appliance-$ARCH.tar.gz" --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/containers-v$VERSION"
+          CANDIDATE: ${{ inputs.candidate_artifacts }}
+        run: |
+          extra=()
+          if [ "$CANDIDATE" = true ]; then extra+=(--candidate-dir dist/candidates); fi
+          python scripts/components.py fetch --lock dependencies.json --platform "$PLATFORM" --arch "$ARCH" --output dist "${extra[@]}"
+      - if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends squashfs-tools libfuse2t64
+      - if: matrix.platform == 'linux' && !inputs.reuse_appliance
+        env:
+          QEMU_PACKAGE: ${{ matrix.arch == 'amd64' && 'qemu-system-x86' || 'qemu-system-arm' }}
+        run: sudo apt-get install -y --no-install-recommends "$QEMU_PACKAGE" ipxe-qemu
+      - name: Package launcher with independent component pins
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+          APPLIANCE_VERSION: ${{ inputs.appliance_version }}
+          REUSE: ${{ inputs.reuse_appliance }}
+        run: |
+          extra=()
+          if [ "$REUSE" = true ]; then
+            appliance_tag=$(python -c 'import json; print(json.load(open("dependencies.json"))["appliance"]["tag"])')
+            runtime_tag=$(python -c 'import json; print(json.load(open("dependencies.json"))["runtime"]["tag"])')
+            if [ "$PLATFORM" != macos ]; then
+              extra+=(--runtime "dist/runtime-$PLATFORM-$ARCH.tar.gz")
+            fi
+          else
+            appliance_tag="appliance-v$APPLIANCE_VERSION"
+            runtime_tag="$appliance_tag"
+          fi
+          python scripts/package.py "$PLATFORM" --arch "$ARCH" --version "$VERSION" --appliance "dist/appliance-$ARCH.tar.gz" \
+            --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$appliance_tag" \
+            --runtime-base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$runtime_tag" "${extra[@]}"
+          if [ "$REUSE" = true ] && [ "$PLATFORM" != macos ]; then
+            mkdir -p dist/acceptance/qemu
+            tar -xzf "dist/runtime-$PLATFORM-$ARCH.tar.gz" -C dist/acceptance/qemu
+          fi
       - name: Linux KVM boot, Kite workload, restart and encrypted restore
         if: matrix.platform == 'linux' && matrix.arch == 'amd64'
         shell: bash
+        env:
+          PUBLIC_DEPENDENCIES: ${{ inputs.reuse_appliance && !inputs.candidate_artifacts }}
         run: |
           test -c /dev/kvm
           sudo chmod a+rw /dev/kvm
           mkdir -p dist/acceptance/bundle dist/acceptance/qemu
           tar -xzf dist/appliance-amd64.tar.gz -C dist/acceptance/bundle
-          tar -xzf dist/releases/runtime-linux-amd64.tar.gz -C dist/acceptance/qemu
-          python scripts/smoke.py --binary dist/releases/stage-linux-amd64/containers-anywhere/containers-anywhere --bundle dist/acceptance/bundle --state dist/smoke --restore --gateway
+          if [ -f dist/releases/runtime-linux-amd64.tar.gz ]; then
+            tar -xzf dist/releases/runtime-linux-amd64.tar.gz -C dist/acceptance/qemu
+          fi
+          runtime=dist/releases/runtime-linux-amd64.tar.gz
+          if [ ! -f "$runtime" ]; then runtime=dist/runtime-linux-amd64.tar.gz; fi
+          runtime_sha=$(sha256sum "$runtime" | cut -d ' ' -f1)
+          appdir=dist/releases/stage-linux-amd64/containers-anywhere
+          caddy_sha=$(sha256sum "$appdir/caddy" | cut -d ' ' -f1)
+          go build -trimpath -ldflags="-X main.appVersion=replacement-test -X main.applianceURL=https://invalid.example/not-the-installed-appliance -X main.applianceSHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -X main.runtimeURL=https://invalid.example/qemu -X main.runtimeSHA256=$runtime_sha -X main.caddySHA256=$caddy_sha" -o "$appdir/replacement" .
+          extra=()
+          if [ "$PUBLIC_DEPENDENCIES" = true ]; then extra+=(--download); fi
+          python scripts/smoke.py --binary "$appdir/containers-anywhere" --replacement-binary "$appdir/replacement" --runtime-archive "$runtime" --bundle dist/acceptance/bundle --state dist/smoke --restore --gateway "${extra[@]}"
       # Windows WHPX has no hosted runner, so replay its machine/CPU pair under
       # KVM. This checks the configuration WHPX depends on, not WHPX itself.
       - name: Linux KVM boot with the WHPX machine and CPU model
@@ -151,7 +235,7 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           export CONTAINERS_TEST_CADDY_CONFIG="$RUNNER_TEMP/caddy-config.json"
-          go test -run '^TestCaddyConfigHasNoPublicManagement$' .
+          go test -count=1 -run '^TestCaddyConfigHasNoPublicManagement$' .
           if [ "$PLATFORM" = macos ]; then
             helper="dist/releases/stage-macos-$ARCH/Containers Anywhere.app/Contents/MacOS/caddy"
           elif [ "$PLATFORM" = windows ]; then
@@ -163,11 +247,11 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: diagnostics-${{ matrix.platform }}-${{ matrix.arch }}
+          name: ${{ inputs.candidate_artifacts && 'candidate-app-' || '' }}diagnostics-${{ matrix.platform }}-${{ matrix.arch }}
           path: dist/smoke*/*.log
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: package-${{ matrix.platform }}-${{ matrix.arch }}
+          name: ${{ inputs.candidate_artifacts && 'candidate-app-' || '' }}package-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
             dist/releases/Containers-Anywhere-*
             dist/releases/runtime-*.tar.gz*
@@ -177,7 +261,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: matrix.platform == 'windows'
         with:
-          name: acceptance-launcher-windows-amd64
+          name: ${{ inputs.candidate_artifacts && 'candidate-app-' || '' }}acceptance-launcher-windows-amd64
           path: dist/releases/stage-windows-amd64/containers-anywhere/containers-anywhere.exe
           if-no-files-found: error
           retention-days: 14

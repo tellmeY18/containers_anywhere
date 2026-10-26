@@ -1,4 +1,4 @@
-package main
+package guest
 
 import (
 	"encoding/json"
@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tellmeY18/containers_anywhere/internal/atomicfile"
 )
 
 func TestKiteSecretsPersistAndRecreateManifest(t *testing.T) {
@@ -66,7 +68,7 @@ func TestKiteSecretsExistingFiles(t *testing.T) {
 		t.Run(content, func(t *testing.T) {
 			root := t.TempDir()
 			keys := filepath.Join(root, "containers-anywhere/kite-secrets.json")
-			if err := atomicWrite(keys, []byte(content), 0600); err != nil {
+			if err := atomicfile.WritePrivate(keys, []byte(content)); err != nil {
 				t.Fatal(err)
 			}
 			err := initKiteSecrets(root)
@@ -87,38 +89,20 @@ func TestKiteSecretsExistingFiles(t *testing.T) {
 	}
 }
 
-func TestKiteInitializationDoesNotProvisionOrModifyApplications(t *testing.T) {
+func TestKiteInitializationDoesNotProvisionApplications(t *testing.T) {
 	root := t.TempDir()
 	if err := initKiteSecrets(root); err != nil {
 		t.Fatal(err)
 	}
-	legacy := []string{
+	applications := []string{
 		"containers-anywhere/cncm-bootstrap.json",
 		"rancher/k3s/server/manifests/00-cncm-bootstrap.json",
 		"rancher/k3s/server/manifests/cncm.yaml",
-		"rancher/k3s/server/db/state.db",
-		"rancher/k3s/storage/cncm-data/data",
-		"rancher/k3s/storage/care-data/data",
 	}
-	for _, name := range legacy {
+	for _, name := range applications {
 		path := filepath.Join(root, name)
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("created application state %s: %v", name, err)
-		}
-		// Opaque or even invalid application files are not ours to reconcile.
-		if err := atomicWrite(path, []byte("existing-"+name), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for i := 0; i < 2; i++ {
-		if err := initKiteSecrets(root); err != nil {
-			t.Fatal(err)
-		}
-		for _, name := range legacy {
-			b, err := os.ReadFile(filepath.Join(root, name))
-			if err != nil || string(b) != "existing-"+name {
-				t.Fatalf("modified application state %s: %v", name, err)
-			}
 		}
 	}
 }

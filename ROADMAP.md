@@ -3,6 +3,15 @@
 Status: architecture agreed for planning; the recovery features below are not
 shipped unless explicitly marked available. No CARE-specific work is included.
 
+Pre-stability policy: until the user explicitly declares stability, prioritize
+fresh 0.1.0 and current component contracts. Do not implement or run backward
+compatibility, alpha migration matrices or legacy preservation drills. Retain
+integrity/security checks and non-destructive reset-required errors.
+Robust current-design update flow remains necessary and a 0.1.0 priority:
+independent component selection, normal-update data preservation, and transactional
+appliance updates are not obsolete backward-compatibility work. Production is
+planned for v1.0.0; stability must be explicitly declared by the user.
+
 ## Available: alpha foundation
 
 - Small desktop launcher, pinned resumable downloads, K3s and Kite appliance.
@@ -24,16 +33,22 @@ shipped unless explicitly marked available. No CARE-specific work is included.
 - No existing workload deletion, secret/PVC reset, saved-config replacement or
   appliance migration. Existing disks retain the exact-appliance requirement.
 
-Gate: fresh-install namespace checks; unchanged existing gateway settings and
-legacy-named namespace/secret identities; generic workload/PVC and Kite identity
-through reboot and encrypted restore. Synthetic legacy-named objects are not a
-real CNCM/CARE migration drill. Physical multi-device mDNS/firewall/trust tests
+Gate: fresh-install namespace checks; current gateway settings, generic
+workload/PVC and Kite identity through reboot and encrypted restore.
+Physical multi-device mDNS/firewall/trust tests
 remain required. No Gateway API or publication CRD/controller is shipped.
 
 ## R1 — Prove and inspect recovery points
 
+Release engineering is tracked separately in [RELEASES.md](docs/RELEASES.md).
+Independent app/appliance build and draft-promotion paths are in source, pending
+integration acceptance; they do not ship final 0.1.0. Universal defaults are
+integrated in source. Remaining work includes native host supervision/resource/health handling, off-device
+cold recovery and replacement-host drills, journaled appliance updates and
+physical platform acceptance. No appliance migration is enabled by app replacement.
+
 - Backup manifest: identity, timestamp, disk geometry, checksums, format and tool
-  versions; preserve backward readability of published alpha backups.
+  versions for the current release; no alpha backward-readability requirement.
 - Standalone authenticated backup verification without activation; distinguish
   archive integrity from a successful application restore.
 - Durable staging/publication journal, interruption cleanup and capacity checks.

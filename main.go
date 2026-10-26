@@ -23,18 +23,21 @@ import (
 )
 
 type manifest struct {
-	Product     string            `json:"product,omitempty"`
-	Version     string            `json:"version"`
-	Arch        string            `json:"arch"`
-	Kernel      string            `json:"kernel"`
-	Initrd      string            `json:"initrd"`
-	System      string            `json:"system"`
-	Files       map[string]string `json:"files"`
-	Format      int               `json:"format,omitempty"`
-	Protocol    int               `json:"protocol,omitempty"`
-	DataBytes   int64             `json:"data_bytes,omitempty"`
-	hostRuntime string
+	Product      string            `json:"product,omitempty"`
+	Version      string            `json:"version"`
+	Arch         string            `json:"arch"`
+	Kernel       string            `json:"kernel"`
+	Initrd       string            `json:"initrd"`
+	System       string            `json:"system"`
+	Files        map[string]string `json:"files"`
+	Format       int               `json:"format,omitempty"`
+	Protocol     int               `json:"protocol,omitempty"`
+	Capabilities []string          `json:"capabilities,omitempty"`
+	DataBytes    int64             `json:"data_bytes,omitempty"`
+	hostRuntime  string
 }
+
+var appVersion = "development"
 
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == "setup-system" {
@@ -47,6 +50,10 @@ func main() {
 }
 
 func run() error {
+	if len(os.Args) == 2 && os.Args[1] == "version" {
+		fmt.Println("Containers Anywhere app " + appVersion)
+		return nil
+	}
 	if len(os.Args) > 1 && os.Args[1] == "guest" {
 		return guestMain()
 	}
@@ -162,6 +169,7 @@ func serve(state, bundle string, port int, noOpen bool) error {
 		return err
 	}
 	defer unlock()
+	downloaded := bundle == ""
 	if bundle == "" {
 		bundle, err = bootstrap(state, func(detail string) {
 			log.Print(detail)
@@ -187,6 +195,9 @@ func serve(state, bundle string, port int, noOpen bool) error {
 		return fmt.Errorf("bundle architecture %s does not match %s", m.Arch, runtime.GOARCH)
 	}
 	m.hostRuntime = filepath.Join(filepath.Dir(bundle), "qemu")
+	if downloaded {
+		m.hostRuntime = filepath.Join(runtimeCache(state), "qemu")
+	}
 	if err = ensureData(state, bundle, m); err != nil {
 		return err
 	}
@@ -195,7 +206,7 @@ func serve(state, bundle string, port int, noOpen bool) error {
 		return err
 	}
 	if !compatibleData(release, m) {
-		return errors.New("cluster data requires its original bundle; automatic upgrades are not supported in this MVP")
+		return errors.New("cluster data does not match the selected appliance; reset required: choose a new empty state directory (existing data is unchanged)")
 	}
 	_ = saveJSON(filepath.Join(state, "progress.json"), "Starting K3s and Kite…")
 	vm, err := bootVM(bundle, state, m)
