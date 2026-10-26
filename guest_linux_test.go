@@ -87,22 +87,38 @@ func TestKiteSecretsExistingFiles(t *testing.T) {
 	}
 }
 
-func TestCNCMBootstrapTokenIsStable(t *testing.T) {
+func TestKiteInitializationDoesNotProvisionOrModifyApplications(t *testing.T) {
 	root := t.TempDir()
-	if err := initCNCMSecret(root); err != nil {
+	if err := initKiteSecrets(root); err != nil {
 		t.Fatal(err)
 	}
-	first, err := cncmToken(root)
-	if err != nil || len(first) < 24 {
-		t.Fatalf("token %q, %v", first, err)
+	legacy := []string{
+		"containers-anywhere/cncm-bootstrap.json",
+		"rancher/k3s/server/manifests/00-cncm-bootstrap.json",
+		"rancher/k3s/server/manifests/cncm.yaml",
+		"rancher/k3s/server/db/state.db",
+		"rancher/k3s/storage/cncm-data/data",
+		"rancher/k3s/storage/care-data/data",
 	}
-	if err = initCNCMSecret(root); err != nil {
-		t.Fatal(err)
+	for _, name := range legacy {
+		path := filepath.Join(root, name)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("created application state %s: %v", name, err)
+		}
+		// Opaque or even invalid application files are not ours to reconcile.
+		if err := atomicWrite(path, []byte("existing-"+name), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if second, _ := cncmToken(root); second != first {
-		t.Fatal("bootstrap token rotated across restarts")
-	}
-	if _, err = os.Stat(filepath.Join(root, "rancher/k3s/server/manifests/00-cncm-bootstrap.json")); err != nil {
-		t.Fatal(err)
+	for i := 0; i < 2; i++ {
+		if err := initKiteSecrets(root); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range legacy {
+			b, err := os.ReadFile(filepath.Join(root, name))
+			if err != nil || string(b) != "existing-"+name {
+				t.Fatalf("modified application state %s: %v", name, err)
+			}
+		}
 	}
 }

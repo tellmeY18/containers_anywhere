@@ -251,7 +251,7 @@ func serve(state, bundle string, port int, noOpen bool) error {
 			}
 			return
 		}
-		if !(r.Method == "GET" && (name == "status" || name == "logs" || name == "cncm")) && !(r.Method == "POST" && name == "stop") {
+		if !(r.Method == "GET" && (name == "status" || name == "logs")) && !(r.Method == "POST" && name == "stop") {
 			http.NotFound(w, r)
 			return
 		}

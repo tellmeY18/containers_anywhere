@@ -71,7 +71,7 @@ func (c gatewayConfig) validate() error {
 		}
 	}
 	if c.MDNS && c.HTTPPort == 0 {
-		return errors.New("mDNS demo requires an HTTP listener")
+		return errors.New("mDNS requires an HTTP listener for the demo")
 	}
 	if c.MDNS && !slices.Contains(c.Addresses, "127.0.0.1") && !slices.Contains(c.Addresses, wildcardAddress) {
 		return errors.New("mDNS health verification requires 127.0.0.1 among gateway addresses")
@@ -102,13 +102,11 @@ func (c gatewayConfig) listeners(port int) []string {
 }
 
 func (c gatewayConfig) allows(host, namespace string) bool {
-	if namespace == "containers-demo" && (host == "demo.local" || host == "demo.localhost") {
-		return true
-	}
 	if !validGatewayHost(host) || !slices.Contains(c.Namespaces, namespace) {
 		return false
 	}
-	if !(strings.HasSuffix(host, "."+namespace+".localhost") || strings.HasSuffix(host, "."+namespace+".local")) {
+	demo := namespace == "containers-demo" && (host == "demo.local" || host == "demo.localhost")
+	if !demo && !(strings.HasSuffix(host, "."+namespace+".localhost") || strings.HasSuffix(host, "."+namespace+".local")) {
 		return false
 	}
 	for _, domain := range c.Domains {
@@ -222,7 +220,15 @@ type gateway struct {
 	childError     string
 	discoveryError string
 	advertiser     *demoAdvertiser
+	endpoints      []gatewayEndpoint
 	state          string
+}
+
+type gatewayEndpoint struct {
+	URL        string `json:"url"`
+	Ready      bool   `json:"ready"`
+	Error      string `json:"error,omitempty"`
+	Advertised bool   `json:"advertised"`
 }
 
 func (g *gateway) status() map[string]any {
@@ -233,13 +239,12 @@ func (g *gateway) status() map[string]any {
 		urls = append(urls, fmt.Sprintf("https://%s:%d", host, g.config.Port))
 	}
 	demoURL := ""
-	if g.advertiser != nil {
-		demoURL = "http://demo.local"
-		if g.config.HTTPPort != 80 {
-			demoURL += fmt.Sprint(":", g.config.HTTPPort)
+	for _, endpoint := range g.endpoints {
+		if endpoint.Ready && strings.HasPrefix(endpoint.URL, "http://demo.local:") {
+			demoURL = endpoint.URL
 		}
 	}
-	return map[string]any{"enabled": true, "listen": g.config.listeners(g.config.Port), "urls": urls, "error": g.err, "processError": g.childError, "discoveryError": g.discoveryError, "demoURL": demoURL, "certificateTrust": "manual"}
+	return map[string]any{"enabled": true, "listen": g.config.listeners(g.config.Port), "urls": urls, "endpoints": append([]gatewayEndpoint{}, g.endpoints...), "error": g.err, "processError": g.childError, "discoveryError": g.discoveryError, "demoURL": demoURL, "certificateTrust": "manual"}
 }
 
 func (g *gateway) permits(host string) bool {
@@ -248,34 +253,13 @@ func (g *gateway) permits(host string) bool {
 	return slices.Contains(g.hosts, host)
 }
 
-func startGateway(state string, vm machine) (*gateway, error) {
+func loadGatewayConfig(state string) (*gatewayConfig, error) {
 	b, err := os.ReadFile(filepath.Join(state, "gateway.json"))
 	if os.IsNotExist(err) {
 		if caddySHA256 == "" {
 			return nil, nil
 		} // Unpackaged development launcher.
-		cfg := gatewayConfig{Port: 443, HTTPPort: 80, MDNS: true, Addresses: []string{"127.0.0.1"}, Namespaces: []string{"containers-demo", "cncm-system", "care"}, Domains: []string{"demo.local", "demo.localhost", "cncm-system.local", "cncm-system.localhost", "care.local", "care.localhost"}}
-		switch {
-		case canBind("127.0.0.1"):
-			links, linkErr := demoLinks(nil)
-			if linkErr != nil {
-				return nil, linkErr
-			}
-			for _, link := range links {
-				cfg.Addresses = append(cfg.Addresses, link.ip.String())
-			}
-		case canBind(wildcardAddress):
-			cfg.Addresses = []string{wildcardAddress}
-		default:
-			cfg.Port, cfg.HTTPPort = 8443, 8080
-			links, linkErr := demoLinks(nil)
-			if linkErr != nil {
-				return nil, linkErr
-			}
-			for _, link := range links {
-				cfg.Addresses = append(cfg.Addresses, link.ip.String())
-			}
-		}
+		cfg := gatewayConfig{Port: 8443, HTTPPort: 8080, Addresses: []string{"127.0.0.1"}, Namespaces: []string{"containers-demo"}, Domains: []string{"demo.local", "demo.localhost"}}
 		if err = saveJSON(filepath.Join(state, "gateway.json"), cfg); err != nil {
 			return nil, err
 		}
@@ -291,6 +275,15 @@ func startGateway(state string, vm machine) (*gateway, error) {
 	if err = cfg.validate(); err != nil {
 		return nil, err
 	}
+	return &cfg, nil
+}
+
+func startGateway(state string, vm machine) (*gateway, error) {
+	saved, err := loadGatewayConfig(state)
+	if err != nil || saved == nil {
+		return nil, err
+	}
+	cfg := *saved
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -397,6 +390,7 @@ func startGateway(state string, vm machine) (*gateway, error) {
 	go g.server.Serve(l)
 	go func() {
 		defer close(g.done)
+		defer g.stopDiscovery()
 		defer transport.CloseIdleConnections()
 		poll := &http.Transport{DialContext: vm.Dial}
 		defer poll.CloseIdleConnections()
@@ -471,7 +465,15 @@ func (g *gateway) refresh(ctx context.Context, client *http.Client) {
 		g.err = "Publication discovery unavailable; retaining last approved hosts"
 		return
 	}
-	g.hosts = publishedHosts(g.config, snapshot)
+	hosts := publishedHosts(g.config, snapshot)
+	if !slices.Equal(hosts, g.hosts) {
+		if g.advertiser != nil {
+			g.advertiser.Close()
+			g.advertiser = nil
+		}
+		g.endpoints = nil
+	}
+	g.hosts = hosts
 	g.err = ""
 }
 
@@ -632,19 +634,3 @@ func caddyConfig(c gatewayConfig, storage, upstream, token string) map[string]an
 }
 
 const wildcardAddress = "0.0.0.0"
-
-// macOS lets unprivileged processes bind ports below 1024 only on the wildcard
-// address. canBind reports whether ports 443 and 80 can be bound on address;
-// without that the gateway falls back to high ports instead of failing startup.
-func canBind(address string) bool {
-	for _, port := range []int{443, 80} {
-		l, err := net.Listen("tcp4", net.JoinHostPort(address, fmt.Sprint(port)))
-		if errors.Is(err, os.ErrPermission) {
-			return false
-		}
-		if l != nil {
-			l.Close()
-		}
-	}
-	return true
-}
