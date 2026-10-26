@@ -29,7 +29,7 @@ in ROADMAP.md. Planned recovery features must not be described as implemented.
 - Do not claim platform boot acceptance from compile/packaging checks.
 - Do not commit dist/, .state/, *.img, node_modules or downloaded artifacts.
 - This is a jj repository. Use jj bookmarks and noninteractive --no-pager commands.
-  Push only when authorized. The default branch is containers-anywhere. Preserve
+  Push only when authorized. The default branch is develop (the general platform); care-mvp is the CARE-bundled line. Preserve
   archive/care-anywhere as the original CARE product history; do not rewrite it.
 - Whole-disk recovery points and cluster datastore backups are not workload PITR.
   PITR claims require tested application-native logs, base backups, keys and a

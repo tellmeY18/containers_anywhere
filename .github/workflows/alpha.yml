@@ -2,7 +2,7 @@ name: Build Containers Anywhere MVP
 on:
   workflow_dispatch:
   push:
-    branches: [containers-anywhere]
+    branches: [develop, care-mvp]
   pull_request:
 permissions:
   contents: read

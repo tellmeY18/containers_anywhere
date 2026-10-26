@@ -20,7 +20,7 @@ def main():
     args = parser.parse_args()
     repo = os.environ["GITHUB_REPOSITORY"]
     run = json.loads(gh("api", f"repos/{repo}/actions/runs/{args.run_id}"))
-    if run["conclusion"] != "success" or run["head_branch"] != "containers-anywhere" or run["path"] != ".github/workflows/alpha.yml" or run["event"] not in {"push", "workflow_dispatch"}:
+    if run["conclusion"] != "success" or run["head_branch"] not in {"develop", "care-mvp"} or run["path"] != ".github/workflows/alpha.yml" or run["event"] not in {"push", "workflow_dispatch"}:
         raise ValueError("Select a successful containers-anywhere MVP build")
     # Source VERSION is read from the tested commit, not the publisher checkout.
     import base64
