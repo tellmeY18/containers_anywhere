@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -15,9 +18,21 @@ import (
 )
 
 // Run on a second device: query multicast directly (not hosts/DNS cache), then
-// fetch the demo at the discovered address with its original HTTP Host intact.
-// An HTTP demo check proves connectivity, not authenticated appliance identity.
-func checkLANDemo() error {
+// fetch the demo over HTTPS at the discovered address with SNI/Host demo.local.
+// Without the appliance's public root certificate this proves connectivity,
+// not authenticated appliance identity.
+func checkLANDemo(caFile string) error {
+	var roots *x509.CertPool
+	if caFile != "" {
+		pem, err := os.ReadFile(caFile)
+		if err != nil {
+			return err
+		}
+		roots = x509.NewCertPool()
+		if !roots.AppendCertsFromPEM(pem) {
+			return fmt.Errorf("%s contains no PEM certificate", caFile)
+		}
+	}
 	links, err := demoLinks(nil)
 	if err != nil {
 		return err
@@ -27,7 +42,7 @@ func checkLANDemo() error {
 	}
 	var failures []error
 	for _, link := range links {
-		if err := checkDemoLink(link); err == nil {
+		if err := checkDemoLink(link, roots); err == nil {
 			fmt.Println("PASS: mDNS -> host Caddy -> authenticated VM bridge -> Traefik -> demo pod")
 			return nil
 		} else {
@@ -37,7 +52,7 @@ func checkLANDemo() error {
 	return errors.Join(failures...)
 }
 
-func checkDemoLink(link demoLink) error {
+func checkDemoLink(link demoLink, roots *x509.CertPool) error {
 	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: link.ip})
 	if err != nil {
 		return err
@@ -97,12 +112,15 @@ func checkDemoLink(link demoLink) error {
 		return errors.New("demo resolves to this computer; run demo-check from a second LAN device")
 	}
 	address := net.JoinHostPort(ip.String(), fmt.Sprint(port))
-	transport := &http.Transport{Proxy: nil, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+	// The demo uses the appliance's private local CA, which a second device does
+	// not trust by default. Verification is skipped only when no CA was supplied.
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: "demo.local", RootCAs: roots, InsecureSkipVerify: roots == nil}
+	transport := &http.Transport{Proxy: nil, TLSClientConfig: tlsConfig, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp4", address)
 	}}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Get("http://demo.local/")
+	resp, err := client.Get("https://demo.local/")
 	if err != nil {
 		return err
 	}
@@ -115,5 +133,10 @@ func checkDemoLink(link demoLink) error {
 		return fmt.Errorf("demo at %s did not return expected workload page (HTTP %d)", address, resp.StatusCode)
 	}
 	fmt.Printf("Discovered demo.local at %s on %s\n", address, link.iface.Name)
+	if roots == nil {
+		fmt.Println("NOTE: certificate not verified; pass the appliance's public root.crt to verify identity")
+	} else {
+		fmt.Println("Certificate verified against the supplied appliance root CA")
+	}
 	return nil
 }

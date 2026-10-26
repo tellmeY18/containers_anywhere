@@ -146,7 +146,7 @@ func (g *gateway) status() map[string]any {
 	}
 	demoURL := ""
 	for _, endpoint := range g.endpoints {
-		if endpoint.Ready && strings.HasPrefix(endpoint.URL, "http://demo.local:") {
+		if endpoint.Ready && strings.HasPrefix(endpoint.URL, "https://demo.local:") {
 			demoURL = endpoint.URL
 		}
 	}

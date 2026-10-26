@@ -105,7 +105,7 @@ spec:
   lan: true
   mdns: true
   tls:
-    mode: HTTP
+    mode: LocalCA
 ---
 apiVersion: networking.containersanywhere.dev/v1alpha1
 kind: WorkloadPublication
@@ -118,4 +118,4 @@ spec:
   lan: false
   mdns: false
   tls:
-    mode: HTTP
+    mode: LocalCA

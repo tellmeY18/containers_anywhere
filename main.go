@@ -115,7 +115,11 @@ func run() error {
 		}
 		return err
 	case "demo-check":
-		return checkLANDemo()
+		if fs.NArg() > 1 {
+			return errors.New("usage: demo-check [root.crt]")
+		}
+		caFile := fs.Arg(0)
+		return checkLANDemo(caFile)
 	case "status", "stop", "logs":
 		c, err := readControl(*state)
 		if err != nil {

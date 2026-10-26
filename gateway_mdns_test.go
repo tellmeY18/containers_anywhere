@@ -2,18 +2,26 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/tellmeY18/containers_anywhere/internal/publication"
 	"golang.org/x/net/dns/dnsmessage"
@@ -21,7 +29,7 @@ import (
 
 func TestDemoMDNSRecordsAndConflict(t *testing.T) {
 	ip := net.IPv4(192, 168, 42, 10)
-	m := dnsmessage.Message{Header: dnsmessage.Header{Response: true, Authoritative: true}, Answers: demoRecords(ip, 80, 120)}
+	m := dnsmessage.Message{Header: dnsmessage.Header{Response: true, Authoritative: true}, Answers: demoRecords(ip, 443, 120)}
 	wire, err := m.Pack()
 	if err != nil {
 		t.Fatal(err)
@@ -43,11 +51,11 @@ func TestDemoMDNSRecordsAndConflict(t *testing.T) {
 		if rr.Header.Type == dnsmessage.TypeAAAA {
 			t.Fatal("advertised unserved IPv6")
 		}
-		if srv, ok := rr.Body.(*dnsmessage.SRVResource); ok && (srv.Port != 80 || srv.Target != demoName) {
+		if srv, ok := rr.Body.(*dnsmessage.SRVResource); ok && (srv.Port != 443 || srv.Target != demoName || rr.Header.Name != demoInstance) {
 			t.Fatal(srv)
 		}
 	}
-	goodbye := dnsmessage.Message{Answers: demoRecords(ip, 80, 0)}
+	goodbye := dnsmessage.Message{Answers: demoRecords(ip, 443, 0)}
 	if demoConflict(goodbye, net.IPv4(192, 168, 42, 11)) {
 		t.Fatal("goodbye blocks name reuse")
 	}
@@ -130,6 +138,56 @@ func TestWorkloadProbeVerifiesTLSAndDoesNotFollowRedirects(t *testing.T) {
 	endpoint.Host = "wrong.example.local"
 	if _, err := probeWorkload(context.Background(), endpoint, host, roots); err == nil {
 		t.Fatal("accepted wrong TLS hostname")
+	}
+}
+
+func TestDemoProbeRequiresVerifiedHTTPSPageAndSelectsHTTPSDemoURL(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "demo.local"}, DNSNames: []string{"demo.local"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, _ := x509.ParseCertificate(der)
+	var page atomic.Value
+	page.Store("<h1>Containers Anywhere works.</h1>")
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS.ServerName != "demo.local" || !strings.HasPrefix(r.Host, "demo.local:") {
+			t.Errorf("incorrect SNI/Host: %s %s", r.TLS.ServerName, r.Host)
+		}
+		io.WriteString(w, page.Load().(string))
+	}))
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}}
+	server.StartTLS()
+	defer server.Close()
+	host, port, _ := net.SplitHostPort(server.Listener.Addr().String())
+	n, _ := strconv.Atoi(port)
+	roots := x509.NewCertPool()
+	roots.AddCert(cert)
+	endpoint := mdnsEndpoint{Host: "demo.local", Port: uint16(n)}
+	if ready, err := probeWorkload(context.Background(), endpoint, host, roots); err != nil || !ready {
+		t.Fatal("demo HTTPS probe failed", ready, err)
+	}
+	if _, err := probeWorkload(context.Background(), endpoint, host, x509.NewCertPool()); err == nil {
+		t.Fatal("accepted demo certificate from an untrusted CA")
+	}
+	page.Store("some other application")
+	if _, err := probeWorkload(context.Background(), endpoint, host, roots); err == nil {
+		t.Fatal("accepted a page that is not the packaged demo")
+	}
+	g := &gateway{endpoints: []gatewayEndpoint{{URL: "http://demo.local:80/", Ready: true}, {URL: "https://demo.local:443/", Ready: true, CertificateReady: true}}}
+	if url := g.status()["demoURL"]; url != "https://demo.local:443/" {
+		t.Fatal("demoURL is not the HTTPS demo endpoint", url)
+	}
+	record := publication.Record{Hostname: "demo.local", LAN: true, MDNS: true, TLS: publication.TLS{Mode: "LocalCA"}}
+	g.config = gatewayConfig{Port: 443, HTTPPort: 80}
+	if url := g.endpoint(record).url(); url != "https://demo.local:443/" {
+		t.Fatal(url)
 	}
 }
 

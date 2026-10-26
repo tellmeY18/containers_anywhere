@@ -76,8 +76,8 @@ func demoLinks(allowed []string) ([]demoLink, error) {
 
 var demoGroup = &net.UDPAddr{IP: net.IPv4(224, 0, 0, 251), Port: 5353}
 var demoName = dnsmessage.MustNewName("demo.local.")
-var demoService = dnsmessage.MustNewName("_http._tcp.local.")
-var demoInstance = dnsmessage.MustNewName("Containers Anywhere._http._tcp.local.")
+var demoService = dnsmessage.MustNewName("_https._tcp.local.")
+var demoInstance = dnsmessage.MustNewName("Containers Anywhere._https._tcp.local.")
 
 type mdnsEndpoint struct {
 	Host string
@@ -87,7 +87,7 @@ type mdnsEndpoint struct {
 
 func (e mdnsEndpoint) names() (dnsmessage.Name, dnsmessage.Name, dnsmessage.Name) {
 	name := dnsmessage.MustNewName(e.Host + ".")
-	if e.Host == "demo.local" && e.HTTP {
+	if e.Host == "demo.local" && !e.HTTP {
 		return name, demoService, demoInstance
 	}
 	service := "_https._tcp.local."
@@ -113,7 +113,7 @@ type demoAdvertiser struct {
 }
 
 func demoRecords(ip net.IP, port uint16, ttl uint32) []dnsmessage.Resource {
-	return (mdnsEndpoint{Host: "demo.local", Port: port, HTTP: true}).records(ip, ttl)
+	return (mdnsEndpoint{Host: "demo.local", Port: port}).records(ip, ttl)
 }
 
 func (e mdnsEndpoint) records(ip net.IP, ttl uint32) []dnsmessage.Resource {
@@ -512,7 +512,7 @@ func probeWorkload(ctx context.Context, endpoint mdnsEndpoint, address string, r
 	}
 	defer resp.Body.Close()
 	certificateReady := resp.TLS != nil && len(resp.TLS.VerifiedChains) > 0
-	if endpoint.HTTP && (endpoint.Host == "demo.local" || endpoint.Host == "demo.localhost") {
+	if endpoint.Host == "demo.local" || endpoint.Host == "demo.localhost" {
 		body, err := io.ReadAll(io.LimitReader(resp.Body, 32768))
 		if err != nil || resp.StatusCode != 200 || !strings.Contains(string(body), "Containers Anywhere works.") {
 			return certificateReady, fmt.Errorf("demo not serving on %s (HTTP %d)", address, resp.StatusCode)

@@ -164,7 +164,10 @@ needed. The branded page is actually served by that pod, through Traefik and
 native Caddy; it is not a launcher fallback page.
 
 Two ordinary publication objects enable the demo: `demo` for demo.local
-(LAN/mDNS/HTTP) and `demo-localhost` for demo.localhost (loopback/HTTP).
+(LAN/mDNS/LocalCA) and `demo-localhost` for demo.localhost (loopback/LocalCA).
+Both serve HTTPS with certificates from the appliance's local CA; plain HTTP on
+the HTTP port returns a 308 redirect to HTTPS (plus the /root.crt bootstrap
+resource). Browsers warn until the public root certificate is trusted.
 The packaged demo is the only preinstalled application. Names are reserved to
 those exact namespace/resource pairs.
 
@@ -180,7 +183,8 @@ Applications serving only a non-root path remain routable but will not be marked
 responding or advertised until their root responds. This is endpoint availability,
 not application health, login success or a production readiness guarantee.
 
-The non-sensitive demo is checked over HTTP and must return its expected page.
+The demo is probed over HTTPS like any LocalCA publication and must also
+return its expected page.
 The responder probes for conflicting names, sends A/PTR/SRV/TXT
 records on configured IPv4 interfaces, refreshes them, and sends goodbye records
 on stop, removed approval or failed endpoint checks. LocalCA SRV records use
@@ -194,11 +198,14 @@ advertisements; the owner must reconfigure changed addresses.
 From a second computer with the launcher installed, run
 `containers-anywhere demo-check`. It performs direct multicast A/SRV discovery
 (bypassing hosts-file/DNS-cache shortcuts), rejects a self-test address, then
-retrieves the expected pod page over the discovered host port. It does not
-start a VM, install trust, or change firewall settings. This is a connectivity
-check, not a cryptographic identity check; HTTP/mDNS can be spoofed on the LAN.
+retrieves the expected pod page over HTTPS (SNI demo.local) on the discovered
+host port. It does not start a VM, install trust, or change firewall settings.
+Without arguments it does not verify the certificate, so it is a connectivity
+check, not an identity check; mDNS can be spoofed on the LAN. Pass the
+appliance's public root certificate (`containers-anywhere demo-check root.crt`)
+to also verify the certificate chain and hostname.
 
-Open `http://demo.local` from a second device (include `:8080` if low ports were
+Open `https://demo.local` from a second device (use `:8443` if low ports were
 unavailable). LocalCA publications redirect HTTP requests to HTTPS;
 the exact public /root.crt bootstrap resource is also available over HTTP.
 Phones can test the path before CA enrollment. HTTP bootstrap is not authenticated;
@@ -258,7 +265,7 @@ POSTs is introduced. The relay limits concurrent guest connections to 128.
 This slice supports HTTP/1.1 and WebSocket upgrades through the bridge. Caddy
 accepts browser HTTP/2, but upstream gRPC/h2c and UDP/HTTP3 are not implemented.
 There is no patient-data access logging by default. Demo readiness is exposed
-as demoURL and discoveryError in gateway-status and the desktop panel.
+as demoURL (the responding `https://demo.local` endpoint) and discoveryError in gateway-status and the desktop panel.
 
 CI validates the generated config with the packaged Caddy. The KVM smoke test
 uses projected service-account tokens from workload pods to create Service,
