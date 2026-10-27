@@ -58,7 +58,8 @@ def host_api_acceptance(c, browser, request, wait, process, state, timeout):
     #    takes effect only at the next start.
     apply(host_request("resize-ok", {"type": "resources", "resources": {"cpus": 2, "memoryMiB": 3072}}))
     wait(lambda: status_of("hostrequests", "default", "resize-ok").get("phase") == "Pending", process, timeout)
-    assert any(p["name"] == "resize-ok" for p in control("/control/host")["pending"]), "The launcher must list the request"
+    # The launcher refreshes its list every few seconds, so wait for it to catch up.
+    wait(lambda: any(p["name"] == "resize-ok" for p in control("/control/host")["pending"]), process, timeout)
     assert not (state / "resources.json").exists(), "Nothing may change before approval"
     request(c["URL"] + f"/control/host/requests/{uid_of('resize-ok')}/approve", c["Token"], data={})
     wait(lambda: status_of("hostrequests", "default", "resize-ok").get("phase") == "Applied", process, timeout)
