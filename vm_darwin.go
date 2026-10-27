@@ -28,7 +28,7 @@ func bootVM(bundle, state string, m manifest) (machine, error) {
 	if e != nil {
 		return nil, e
 	}
-	cpus, memory, e := vmResources()
+	cpus, memory, e := vmResourcesFor(state)
 	if e != nil {
 		return nil, e
 	}

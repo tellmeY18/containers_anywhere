@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"syscall"
@@ -74,9 +75,10 @@ func run() error {
 	file := fs.String("file", "", "encrypted backup file")
 	key := fs.String("key", "", "recovery identity file")
 	noOpen := fs.Bool("no-open", false, "do not open a browser")
-	operation := fs.String("operation", "status", "update operation: prepare, activate, commit, cancel, recover, swap, status")
+	operation := fs.String("operation", "status", "operation: update (prepare, activate, commit, cancel, recover, swap, status), requests (list, approve, reject), autostart (enable, disable, status)")
 	originalBundle := fs.String("original-bundle", "", "exact selected bundle for update recovery (default: verified cache)")
 	destination := fs.String("destination", "", "new empty recovery destination")
+	requestID := fs.String("id", "", "host request UID for requests approve/reject")
 	acceptEffects := fs.Bool("accept-external-effects", false, "acknowledge candidate workloads can make irreversible external writes; no automatic rollback")
 	acceptValidation := fs.Bool("accept-workload-validation", false, "attest workload/PVC contents and credentials were validated through the candidate")
 	acceptLoss := fs.Bool("accept-data-loss", false, "acknowledge cold recovery loses later writes and requires external side-effect reconciliation")
@@ -98,6 +100,10 @@ func run() error {
 		return backup(*state, *file)
 	case "restore":
 		return restore(*state, *file, *key)
+	case "requests":
+		return runRequests(*state, *operation, *requestID)
+	case "autostart":
+		return runAutostart(*state, *operation)
 	case "update":
 		return runUpdate(*state, *operation, *bundle, *originalBundle, *destination, *port, *noOpen, *acceptEffects, *acceptValidation, *acceptLoss)
 	case "gateway-configure":
@@ -135,7 +141,7 @@ func run() error {
 		}
 		return err
 	default:
-		return errors.New("commands: desktop, serve, doctor, status, stop, logs, backup, restore, update, gateway-configure, gateway-status, demo-check")
+		return errors.New("commands: desktop, serve, doctor, status, stop, logs, backup, restore, update, requests, autostart, gateway-configure, gateway-status, demo-check")
 	}
 }
 
@@ -165,8 +171,18 @@ func saveJSON(path string, v any) error {
 }
 
 func serve(state, bundle string, port int, noOpen bool) error {
-	return serveUpdate(state, bundle, port, noOpen, false)
+	for {
+		err := serveUpdate(state, bundle, port, noOpen, false)
+		if err != nil || !restartAfterStop.CompareAndSwap(true, false) {
+			return err
+		}
+		log.Print("Restarting the appliance as requested in the launcher")
+	}
 }
+
+var requestUIDPattern = regexp.MustCompile(`^[0-9a-fA-F-]{8,64}$`)
+
+func validRequestUID(uid string) bool { return requestUIDPattern.MatchString(uid) }
 
 var launchVM = bootVM
 
@@ -179,7 +195,7 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 			return err
 		}
 	}
-	if _, _, err := vmResources(); err != nil {
+	if _, _, err := vmResourcesFor(state); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(state, 0700); err != nil {
@@ -292,6 +308,10 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 		return err
 	}
 	defer gateway.Close()
+	bridge := newHostBridge(state, m, gateway, client)
+	bridgeCtx, stopBridge := context.WithCancel(context.Background())
+	defer stopBridge()
+	go bridge.run(bridgeCtx)
 	target, _ := url.Parse("http://guest")
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.Transport = transport
@@ -324,6 +344,35 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 				return
 			}
 			io.WriteString(w, "Candidate committed; local recovery point retained.\n")
+			return
+		}
+		if name == "host" && r.Method == "GET" {
+			out, err := bridge.Describe(r.Context())
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(out)
+			return
+		}
+		if rest, ok := strings.CutPrefix(name, "host/requests/"); ok && r.Method == "POST" {
+			uid, action, found := strings.Cut(rest, "/")
+			if !found || !validRequestUID(uid) || (action != "approve" && action != "reject") {
+				http.NotFound(w, r)
+				return
+			}
+			var err error
+			if action == "approve" {
+				err = bridge.Approve(uid)
+			} else {
+				err = bridge.Reject(uid)
+			}
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			io.WriteString(w, "ok\n")
 			return
 		}
 		if name == "gateway" && r.Method == "GET" {
@@ -413,6 +462,10 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 		case <-done:
 			return vm.Close()
 		case <-swapAborted:
+			return vm.Close()
+		case <-hostPower:
+			// Approved in the launcher. A restart request sets restartAfterStop, and
+			// serve() starts the appliance again once this session has closed.
 			return vm.Close()
 		case healthy := <-ready:
 			if !healthy {

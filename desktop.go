@@ -272,6 +272,19 @@ func desktop(state, bundle string) error {
 			json.NewEncoder(w).Encode(s)
 			return
 		}
+		if r.Method == "GET" && r.URL.Path == "/host/requests" {
+			w.Header().Set("Content-Type", "application/json")
+			cc, err := readControl(state)
+			if err == nil {
+				var b []byte
+				if b, err = controlCall(cc, "GET", "/control/host", nil, 10*time.Second); err == nil {
+					w.Write(b)
+					return
+				}
+			}
+			io.WriteString(w, `{"pending":[]}`)
+			return
+		}
 		if r.Method == "GET" && r.URL.Path == "/logs" {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			for _, name := range []string{"launcher.log", "console.log", "gateway.log"} {
@@ -370,6 +383,21 @@ func desktop(state, bundle string) error {
 			if err == nil {
 				_, err = controlCall(cc, "POST", "/control/update/commit", body, 30*time.Second)
 			}
+		case "/host/approve", "/host/reject":
+			// Approval is a launcher-only act: this panel is the only surface that
+			// holds the desktop capability, and workloads never reach it.
+			var body struct {
+				UID string `json:"uid"`
+			}
+			if json.NewDecoder(io.LimitReader(r.Body, 1024)).Decode(&body) != nil || !validRequestUID(body.UID) {
+				err = errors.New("invalid request")
+				break
+			}
+			var cc control
+			cc, err = readControl(state)
+			if err == nil {
+				_, err = controlCall(cc, "POST", "/control/host/requests/"+body.UID+"/"+strings.TrimPrefix(r.URL.Path, "/host/"), nil, 30*time.Second)
+			}
 		case "/update/cancel":
 			err = runUpdate(state, "cancel", "", "", "", 0, true, false, false, false)
 		case "/stop":
@@ -430,6 +458,7 @@ const desktopHTML = `<!doctype html><html lang="en"><meta charset="utf-8"><meta 
 <a id="kite" hidden target="_blank" rel="noopener noreferrer">Open Kite</a><button id="start">Start / Retry</button><button id="stop">Stop cluster</button><button id="quit">Quit</button><button id="logs">Diagnostics</button>
 <p id="gateway-status" role="status"></p>
 <div id="workloads"></div>
+<h2>Requests</h2><div id="requests" role="status"></div>
 <p id="update-status" role="status"></p>
 <button id="update-prepare">Prepare appliance update</button><button id="update-activate" hidden>Activate / retry candidate</button><button id="update-commit" hidden>Commit validated update</button><button id="update-cancel" hidden>Cancel preparation</button>
 <button id="setup" hidden>Set up this computer</button><button id="restart" hidden>Restart Windows now</button>
@@ -440,4 +469,7 @@ function updateStatus(s){let p=s.update?.phase;document.getElementById('update-s
 function workloads(gateway){let box=document.getElementById('workloads');box.replaceChildren();for(let endpoint of gateway?.endpoints||[]){let row=document.createElement('p');if(endpoint.ready){let a=document.createElement('a');a.href=endpoint.url;a.textContent=endpoint.url;a.target='_blank';a.rel='noopener noreferrer';row.append(a);let note=document.createElement('small');note.textContent=endpoint.advertised?'mDNS announced; client reachability and CA trust need verification':'Responding on configured addresses; client DNS and CA trust need verification';row.append(note)}else{row.textContent=endpoint.url+' — '+(endpoint.error||'Checking workload')}box.append(row)}}
 let opened=false;async function poll(){try{let s=JSON.parse(await call('status'));updateStatus(s);document.getElementById('phase').textContent=s.phase;document.getElementById('detail').textContent=s.detail;document.getElementById('setup').hidden=!s.setupRequired;document.getElementById('restart').hidden=!s.restartRequired;document.getElementById('start').disabled=s.setupRequired||s.restartRequired||s.phase==='setup';document.getElementById('gateway-status').textContent=s.gateway?[s.gateway.error,s.gateway.processError,s.gateway.discoveryError].filter(Boolean).join(' · '):'';workloads(s.gateway);let a=document.getElementById('kite');a.hidden=!s.kiteURL;if(s.kiteURL){a.href=s.kiteURL;if(!opened){opened=true;document.title='Ready — Containers Anywhere'}}}catch(e){document.getElementById('detail').textContent=e.message}setTimeout(poll,2500)}
 for(let op of ['prepare','activate','commit','cancel'])document.getElementById('update-'+op).onclick=async()=>{let warnings={prepare:'Stop the cluster and prepare a local cold recovery point? This is not off-device protection.',activate:'Candidate workloads can execute cron, webhooks and external writes immediately. There is no isolation or automatic rollback. Activate or retry with the CURRENT disk?',commit:'Have you verified your workload data/PVC markers and credentials through this candidate? K3s/Kite health alone is insufficient.',cancel:'Cancel preparation without deleting retained evidence?'};if(!confirm(warnings[op]))return;try{document.getElementById('output').textContent=await call('update/'+op,'POST',{external_effects:op==='activate',workloads_validated:op==='commit'})}catch(e){document.getElementById('output').textContent=e.message}};
-for(let name of ['start','stop','quit','logs','setup','restart'])document.getElementById(name).onclick=async()=>{if(name==='restart'&&!confirm('Save your work first. Restart Windows now?'))return;try{let text=await call(name,name==='logs'?'GET':'POST');document.getElementById('output').textContent=text}catch(e){document.getElementById('output').textContent=e.message}};poll();</script></html>`
+for(let name of ['start','stop','quit','logs','setup','restart'])document.getElementById(name).onclick=async()=>{if(name==='restart'&&!confirm('Save your work first. Restart Windows now?'))return;try{let text=await call(name,name==='logs'?'GET':'POST');document.getElementById('output').textContent=text}catch(e){document.getElementById('output').textContent=e.message}};poll();
+let hostText={resources:r=>'Resize the appliance to '+r.resources.cpus+' CPUs and '+r.resources.memoryMiB+' MiB of memory (takes effect at the next restart)',power:r=>'Appliance: '+r.power.action,autostart:r=>(r.autostart.enabled?'Start':'Do not start')+' Containers Anywhere automatically at login','prune-images':r=>'Remove unused container images (volumes and images in use are never touched)','lan-check':r=>'Check this computer\'s network addresses'};
+async function loadRequests(){try{let d=JSON.parse(await call('host/requests'));let box=document.getElementById('requests');box.replaceChildren();let list=d.pending||[];if(!list.length){box.textContent='No requests are waiting.';return}for(let r of list){let row=document.createElement('p');let who=document.createElement('strong');who.textContent=r.namespace+'/'+r.name;let what=(hostText[r.spec.type]||(()=>r.spec.type))(r.spec);row.append(who,' asks: ',what);if(r.spec.reason){let why=document.createElement('small');why.textContent=' ('+r.spec.reason+')';row.append(why)}for(let verb of ['approve','reject']){let b=document.createElement('button');b.textContent=verb==='approve'?'Approve':'Reject';b.onclick=async()=>{if(verb==='approve'&&!confirm('Approve this request?\n\n'+what))return;try{await call('host/'+verb,'POST',{uid:r.uid})}catch(e){document.getElementById('output').textContent=e.message}loadRequests()};row.append(' ',b)}box.append(row)}}catch(e){}}
+setInterval(loadRequests,4000);loadRequests();</script></html>`

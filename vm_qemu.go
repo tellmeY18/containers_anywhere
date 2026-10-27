@@ -76,7 +76,7 @@ func bootVM(bundle, state string, m manifest) (machine, error) {
 	l.Close() // QEMU owns the listener; TLS pinning makes a port race fail closed.
 	_, port, _ := net.SplitHostPort(address)
 	console, machine, cpu := qemuPlatform(accel, m.Arch)
-	cpus, memory, err := vmResources()
+	cpus, memory, err := vmResourcesFor(state)
 	if err != nil {
 		return nil, err
 	}

@@ -39,3 +39,18 @@ func TestControlCallDoesNotFollowRedirectsOrLeakToken(t *testing.T) {
 		t.Fatal("followed redirect to another origin")
 	}
 }
+
+func TestDesktopShowsWorkloadRequestsWithoutTrustingTheirText(t *testing.T) {
+	for _, required := range []string{`id="requests"`, "host/requests", "'host/'+verb", "['approve','reject']", "confirm("} {
+		if !strings.Contains(desktopHTML, required) {
+			t.Fatalf("missing request approval UI: %s", required)
+		}
+	}
+	// Request names and reasons come from workloads. They must only ever be set as
+	// text, never parsed as markup.
+	for _, forbidden := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"} {
+		if strings.Contains(desktopHTML, forbidden) {
+			t.Fatalf("request text could be injected through %s", forbidden)
+		}
+	}
+}
