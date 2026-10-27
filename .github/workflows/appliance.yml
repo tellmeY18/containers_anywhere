@@ -1,6 +1,11 @@
 name: Build and accept appliance
 on:
   workflow_dispatch:
+    inputs:
+      extended:
+        description: Also run the wider acceptance checks (full publication suite, host API, registry trust)
+        type: boolean
+        default: false
   pull_request:
     paths:
       - 'APPLIANCE_VERSION'
@@ -11,6 +16,7 @@ on:
       - 'internal/boottls/**'
       - 'internal/protocol/**'
       - 'internal/publication/**'
+      - 'internal/hostapi/**'
       - 'internal/atomicfile/**'
       - 'go.mod'
       - 'go.sum'
@@ -40,6 +46,7 @@ jobs:
     uses: ./.github/workflows/build-architecture.yml
     with:
       arch: amd64
+      extended: ${{ github.event_name == 'workflow_dispatch' && inputs.extended }}
       system: x86_64-linux
       runner: ubuntu-24.04
       packages: '{"include":[{"runner":"ubuntu-24.04","platform":"linux","arch":"amd64"},{"runner":"windows-2025","platform":"windows","arch":"amd64"}]}'
@@ -50,6 +57,7 @@ jobs:
     uses: ./.github/workflows/build-architecture.yml
     with:
       arch: arm64
+      extended: ${{ github.event_name == 'workflow_dispatch' && inputs.extended }}
       system: aarch64-linux
       runner: ubuntu-24.04-arm
       packages: '{"include":[{"runner":"ubuntu-24.04-arm","platform":"linux","arch":"arm64"},{"runner":"macos-latest","platform":"macos","arch":"arm64"}]}'

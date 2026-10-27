@@ -43,6 +43,13 @@ encrypted restore. The KVM smoke includes these checks; passing evidence is
 required before release. Physical multi-device mDNS/firewall/trust tests remain
 required. This CRD contract does not implement Gateway API.
 
+## Host API for workload managers
+
+Implemented in source, acceptance pending: [HostStatus, approval-gated HostRequest,
+HostRegistryTrust, autostart and persisted logs](docs/HOST_API.md). Open: host
+destinations with an S3 endpoint, recovery points and schedules, quiesce hooks, the
+recovery kit, restore plan and restore drill.
+
 ## R1 — Prove and inspect recovery points
 
 Release engineering is tracked separately in [RELEASES.md](docs/RELEASES.md).

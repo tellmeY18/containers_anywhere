@@ -13,6 +13,7 @@ import time
 import urllib.error
 import urllib.request
 
+from host_api_acceptance import host_api_acceptance
 from publication_acceptance import publication_acceptance
 
 
@@ -177,12 +178,25 @@ def main():
             def ready():
                 status = json.loads(request(c["URL"]+"/control/status", c["Token"]))
                 assert status["protocol"] == 1
-                assert {"status", "logs", "stop", "console-proxy", "platform-apply-v1", "workload-publication-v1"}.issubset(status["capabilities"])
+                assert {"status", "logs", "stop", "console-proxy", "platform-apply-v1", "workload-publication-v1", "host-api-v1"}.issubset(status["capabilities"])
                 return status.get("healthy") and status.get("console")
             wait_for(ready, process, timeout)
             if args.boot_only:
                 print("PASS: appliance boots healthy", flush=True)
                 raise BootOnly
+            def host_api_alive():
+                # The bridge works end to end: facts pushed, HostStatus written to the
+                # cluster by the guest, and nothing awaiting approval on a fresh install.
+                host = json.loads(request(c["URL"]+"/control/host", c["Token"]))
+                agent = host.get("agent", {})
+                status = agent.get("status") or {}
+                conditions = {x["type"]: x["status"] for x in status.get("conditions", [])}
+                return (agent.get("written") and conditions.get("HostReported") == "True"
+                        and status.get("guest", {}).get("disk", {}).get("sizeBytes", 0) > 0 and host)
+            host = wait_for(host_api_alive, process, timeout)
+            assert host["facts"]["applianceVersion"], "Host facts are missing the appliance version"
+            assert host["pending"] == [] or not fresh, "A fresh install has nothing to approve"
+            print("PASS: host API bridge publishes HostStatus from host and guest facts", flush=True)
             try:
                 request(c["AppURL"]+"/api/v1/bootstrap")
                 raise AssertionError("Kite bootstrap exposed without host capability")
@@ -228,6 +242,8 @@ def main():
                 marker = observed
             else:
                 assert observed == marker, "PVC contents changed after reboot/restore"
+            if fresh and args.extended:
+                host_api_acceptance(c, browser, request, wait_for, process, directory, timeout)
             if args.gateway:
                 if fresh:
                     publication_acceptance(c["AppURL"], browser, request, wait_for, process,

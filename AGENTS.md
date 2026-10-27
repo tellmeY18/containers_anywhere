@@ -35,6 +35,10 @@ in ROADMAP.md. Planned recovery features must not be described as implemented.
   root image may format it. BEFORE PRODUCTION (v1.0.0): pin the ext4 mkfs features of
   the data disk template, decide the data-disk filesystem (permanent once installed),
   and replace the cold-copy transaction with guest-side datastore snapshot/restore.
+- Host capabilities offered to workloads go through the generic host API
+  (`internal/hostapi`, `platform/hostapi.yaml`, docs/HOST_API.md): read-only status
+  plus approval-gated requests, approved only in the launcher, with no host token ever
+  handed to a pod. Do not add per-application endpoints or defaults.
 - Management listeners remain loopback-only and authenticated. Workload gateways
   may bind configured LAN interfaces; never implicitly expose Kubernetes, Kite,
   Caddy administration or launcher control. Preserve vsock/per-boot mTLS and

@@ -24,6 +24,7 @@ and normal-update data preservation are not excluded by that policy.
 · [Roadmap](ROADMAP.md)
 · [Appliance optimization](docs/APPLIANCE.md)
 · [Workload gateway setup](docs/NETWORKING.md)
+· [Host API for workload managers](docs/HOST_API.md)
 
 CARE Anywhere's original code and documentation are preserved on
 [`archive/care-anywhere`](https://github.com/tellmeY18/containers_anywhere/tree/archive/care-anywhere).

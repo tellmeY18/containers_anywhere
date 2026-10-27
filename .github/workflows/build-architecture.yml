@@ -21,6 +21,10 @@ on:
       appliance_version:
         type: string
         default: ''
+      extended:
+        description: Also run the wider acceptance checks (full publication suite, host API and registry trust).
+        type: boolean
+        default: false
       reuse_appliance:
         description: App builds download pinned published dependencies; never invoke Nix or stage QEMU.
         type: boolean
@@ -42,7 +46,7 @@ jobs:
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
       - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
         with:
-          primary-key: ca-nix-v3-${{ inputs.system }}-${{ hashFiles('APPLIANCE_VERSION', 'flake.nix', 'flake.lock', 'nix/**', 'cmd/guest/**', 'internal/guest/**', 'internal/boottls/**', 'internal/protocol/**', 'internal/publication/**', 'internal/atomicfile/**', 'go.mod', 'go.sum') }}
+          primary-key: ca-nix-v3-${{ inputs.system }}-${{ hashFiles('APPLIANCE_VERSION', 'flake.nix', 'flake.lock', 'nix/**', 'cmd/guest/**', 'internal/guest/**', 'internal/boottls/**', 'internal/protocol/**', 'internal/publication/**', 'internal/hostapi/**', 'internal/atomicfile/**', 'go.mod', 'go.sum') }}
           restore-prefixes-first-match: |
             ca-nix-v3-${{ inputs.system }}-
             ca-nix-v2-${{ inputs.system }}-
@@ -202,6 +206,7 @@ jobs:
         shell: bash
         env:
           PUBLIC_DEPENDENCIES: ${{ inputs.reuse_appliance && !inputs.candidate_artifacts }}
+          EXTENDED: ${{ inputs.extended }}
         run: |
           test -c /dev/kvm
           sudo chmod a+rw /dev/kvm
@@ -218,6 +223,7 @@ jobs:
           go build -trimpath -ldflags="-X main.appVersion=replacement-test -X main.applianceURL=https://invalid.example/not-the-installed-appliance -X main.applianceSHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -X main.runtimeURL=https://invalid.example/qemu -X main.runtimeSHA256=$runtime_sha -X main.caddySHA256=$caddy_sha" -o "$appdir/replacement" .
           extra=()
           if [ "$PUBLIC_DEPENDENCIES" = true ]; then extra+=(--download); fi
+          if [ "$EXTENDED" = true ]; then extra+=(--extended); fi
           if [ -f dist/update-candidate-amd64.tar.gz ]; then
             mkdir -p dist/update-candidate/bundle
             tar -xzf dist/update-candidate-amd64.tar.gz -C dist/update-candidate/bundle
