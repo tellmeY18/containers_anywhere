@@ -150,9 +150,9 @@ func updateDataCompatible(old, next manifest) error {
 	}
 	if old.Arch != runtime.GOARCH || next.Arch != old.Arch ||
 		old.DataContract != "var-lib-v1" || next.DataContract != old.DataContract ||
-		old.K3s == "" || old.K3s != next.K3s || old.Kite == "" || old.Kite != next.Kite ||
+		old.K3s == "" || old.K3s != next.K3s ||
 		old.DataBytes != next.DataBytes {
-		return errors.New("unsupported data contract: this update requires var-lib-v1, identical K3s/Kite schema versions, architecture and disk geometry; reset required for unsupported changes: use a new empty state directory, never delete existing data")
+		return errors.New("unsupported data contract: this update requires var-lib-v1, identical K3s version, architecture and disk geometry; reset required for unsupported changes: use a new empty state directory, never delete existing data")
 	}
 	return nil
 }
@@ -750,13 +750,13 @@ func commitUpdateWithHooks(state string, client *http.Client, r *http.Request, h
 	}
 	defer resp.Body.Close()
 	var health struct {
-		Healthy, K3s, Kite bool
-		Protocol           int
-		Capabilities       []string
+		Healthy, K3s, Console bool
+		Protocol              int
+		Capabilities          []string
 	}
 	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&health) != nil ||
-		!health.Healthy || !health.K3s || !health.Kite || !protocol.Supports(health.Protocol, health.Capabilities) {
-		return errors.New("candidate VM/K3s/Kite or protocol is not healthy; not committed")
+		!health.Healthy || !health.K3s || !health.Console || !protocol.Supports(health.Protocol, health.Capabilities) {
+		return errors.New("candidate VM/K3s/console or protocol is not healthy; not committed")
 	}
 	j.ValidatedAt = time.Now().UTC().Format(time.RFC3339)
 	return writeUpdate(state, &j, "committed", h)

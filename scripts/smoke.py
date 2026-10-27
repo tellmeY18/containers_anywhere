@@ -105,8 +105,8 @@ def main():
             def ready():
                 status = json.loads(request(c["URL"]+"/control/status", c["Token"]))
                 assert status["protocol"] == 1
-                assert {"status", "logs", "stop", "kite-proxy", "workload-publication-v1"}.issubset(status["capabilities"])
-                return status.get("healthy")
+                assert {"status", "logs", "stop", "console-proxy", "platform-apply-v1", "workload-publication-v1"}.issubset(status["capabilities"])
+                return status.get("healthy") and status.get("console")
             wait_for(ready, process, timeout)
             try:
                 request(c["AppURL"]+"/api/v1/bootstrap")

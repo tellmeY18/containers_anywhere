@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -35,7 +36,6 @@ type manifest struct {
 	Capabilities []string          `json:"capabilities,omitempty"`
 	DataContract string            `json:"data_contract,omitempty"`
 	K3s          string            `json:"k3s,omitempty"`
-	Kite         string            `json:"kite,omitempty"`
 	DataBytes    int64             `json:"data_bytes,omitempty"`
 	hostRuntime  string
 }
@@ -264,7 +264,7 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 			return err
 		}
 	}
-	_ = saveJSON(filepath.Join(state, "progress.json"), "Starting K3s and Kite…")
+	_ = saveJSON(filepath.Join(state, "progress.json"), "Starting K3s and platform workloads…")
 	vm, err := launchVM(bundle, state, m)
 	if err != nil {
 		return err
@@ -278,6 +278,9 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 	transport := &http.Transport{DialContext: vm.Dial, ResponseHeaderTimeout: 30 * time.Second}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 30 * time.Second}
+	platformCtx, stopPlatform := context.WithCancel(context.Background())
+	defer stopPlatform()
+	go maintainPlatform(platformCtx, client)
 	gateway, err := startGateway(state, vm)
 	if err != nil {
 		return err
@@ -384,10 +387,10 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 				return
 			case <-tick.C:
 				if resp, e := client.Get("http://guest/_agent/status"); e == nil {
-					var health struct{ Healthy bool }
+					var health struct{ Healthy, Console bool }
 					body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 					resp.Body.Close()
-					if json.Unmarshal(body, &health) == nil && health.Healthy {
+					if json.Unmarshal(body, &health) == nil && health.Healthy && health.Console {
 						ready <- true
 						return
 					}

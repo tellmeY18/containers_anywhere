@@ -9,8 +9,9 @@ where needed, not all baked into every consumer VM by default.
 
 Alpha 49 compressed appliances: ARM64 789,236,297 bytes (789.2 MB); AMD64
 1,002,270,998 bytes (1,002.3 MB), down from alpha 42's 877.2 MB and 1,091.6 MB.
-Both contain NixOS, K3s/containerd and airgap images, the preloaded Kite image and
-guest agent. Defaults: 2 vCPUs, 4 GiB RAM, sparse 16 GiB data disk. These are
+Both contained NixOS, K3s/containerd and airgap images, the preloaded Kite image and
+guest agent (Kite, the gateway and the demo are no longer preloaded; they are
+platform workloads pulled at runtime, so these sizes are stale until re-measured). Defaults: 2 vCPUs, 4 GiB RAM, sparse 16 GiB data disk. These are
 configuration defaults, not measured idle consumption or minimum requirements.
 Guest runtime closures are 1.50 GB (ARM64) and 1.31 GB (AMD64) of uncompressed
 Nix store bytes across 372 paths each.

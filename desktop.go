@@ -254,9 +254,9 @@ func desktop(state, bundle string) error {
 					}
 					if b, err := controlCall(cc, "GET", "/control/status", nil, 10*time.Second); err == nil {
 						var health struct {
-							Healthy bool `json:"healthy"`
+							Healthy, Console bool
 						}
-						if json.Unmarshal(b, &health) == nil && health.Healthy {
+						if json.Unmarshal(b, &health) == nil && health.Healthy && health.Console {
 							s["phase"], s["detail"] = "ready", "K3s and Kite are ready. Open Kite to install and manage your workloads."
 							s["kiteURL"] = cc.AppURL + "/_open?token=" + cc.AppToken
 						}

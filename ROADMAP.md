@@ -22,8 +22,8 @@ planned for v1.0.0; stability must be explicitly declared by the user.
 
 ## Universal defaults — implemented in source, acceptance pending
 
-- Fresh `develop` appliances preload K3s, Kite and the gateway diagnostic demo,
-  not CNCM/CARE. `care-mvp` remains unchanged.
+- Fresh `develop` appliances preload only K3s. The app applies Kite, the gateway and
+  the diagnostic demo as platform workloads (images pulled at runtime), not CNCM/CARE. `care-mvp` remains unchanged.
 - Kite is the workload-management entry point; the 2-vCPU/4-GiB defaults have no
   application-specific memory heuristic or automatic application opening.
 - Workload listeners default to `0.0.0.0`, preferring 80/443 with permission-driven

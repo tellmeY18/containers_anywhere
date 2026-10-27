@@ -53,8 +53,8 @@ under their respective licenses. Source versions are pinned by flake.lock/nixpkg
 Kite v0.16.0 (Apache-2.0) is redistributed as its unmodified, checksum-pinned
 Linux binary with embedded UI inside a locally assembled container image.
 Source and license: https://github.com/kite-org/kite/tree/v0.16.0.
-`nix/kite.yaml` adapts Kite's deployment manifest for persistent local storage,
-generated secrets and the preloaded image.
+`platform/kite.yaml` adapts Kite's deployment manifest for persistent local storage,
+generated secrets and the upstream image, pulled at runtime by digest.
 
 # Downloaded QEMU runtime
 
@@ -65,9 +65,8 @@ from https://github.com/caddyserver/caddy/releases/tag/v2.11.7 with archive pins
 in scripts/caddy.py. The launcher's build embeds its final binary SHA-256.
 Caddy source and license: https://github.com/caddyserver/caddy/tree/v2.11.7.
 
-Traefik (MIT) is built from the nixpkgs revision pinned in flake.lock and
-preloaded as containers-anywhere/traefik. Its version is taken from that pinned
-package, not a mutable latest tag. Source: https://github.com/traefik/traefik.
+Traefik (MIT) runs from the upstream docker.io/library/traefik image, pulled at
+runtime and pinned by version and digest in platform/gateway.yaml. Source: https://github.com/traefik/traefik.
 
 The Windows gateway-directory ACL follows the same CARE Clinic-derived private
 file ACL pattern already attributed above, with directory inheritance enabled.

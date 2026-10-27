@@ -179,7 +179,7 @@ func TestUpdatePublicationEveryDurableBoundary(t *testing.T) {
 }
 
 func TestUpdatePreflightFailures(t *testing.T) {
-	for _, fault := range []string{"space", "corrupt", "contract", "k3s", "kite", "protocol", "arch", "symlink"} {
+	for _, fault := range []string{"space", "corrupt", "contract", "k3s", "protocol", "arch", "symlink"} {
 		t.Run(fault, func(t *testing.T) {
 			state, old, next := updateFixture(t)
 			h := updateHooks{}
@@ -193,8 +193,6 @@ func TestUpdatePreflightFailures(t *testing.T) {
 				m.DataContract = ""
 			case "k3s":
 				m.K3s = "new-schema"
-			case "kite":
-				m.Kite = "new-schema"
 			case "protocol":
 				m.Protocol++
 			case "arch":
@@ -410,9 +408,9 @@ func TestUpdateCommitRequiresHealthAndWorkloadAcceptance(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		name                    string
-		ack, healthy, k3s, kite bool
-		want                    bool
+		name                       string
+		ack, healthy, k3s, console bool
+		want                       bool
 	}{
 		{"no-attestation", false, true, true, true, false},
 		{"launcher-only", true, true, false, false, false},
@@ -421,7 +419,7 @@ func TestUpdateCommitRequiresHealthAndWorkloadAcceptance(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			mustJSON := map[string]any{"healthy": tc.healthy, "k3s": tc.k3s, "kite": tc.kite, "protocol": 1, "capabilities": protocol.Capabilities()}
+			mustJSON := map[string]any{"healthy": tc.healthy, "k3s": tc.k3s, "console": tc.console, "protocol": 1, "capabilities": protocol.Capabilities()}
 			if err := json.NewEncoder(rec).Encode(mustJSON); err != nil {
 				t.Fatal(err)
 			}

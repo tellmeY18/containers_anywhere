@@ -58,7 +58,7 @@ jobs:
           after=$(nix eval --raw ".#packages.$SYSTEM.bundle.drvPath" --no-update-lock-file)
           mv "$RUNNER_TEMP/host-input-main.go" main.go
           test "$before" = "$after"
-      - name: Build preloaded K3s and Kite appliance
+      - name: Build K3s appliance
         id: build
         env:
           SYSTEM: ${{ inputs.system }}

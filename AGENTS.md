@@ -21,8 +21,16 @@ in ROADMAP.md. Planned recovery features must not be described as implemented.
   QEMU with KVM/WHPX. No host Docker, Python, Nix or Node runtime dependencies.
 - Keep all persistent guest state under `/var/lib` (the data disk), including
   K3s/containerd, node identity, Kite SQLite/plugins/keys and local-path volumes.
-- Preload K3s/Kite at build time. Workloads may pull images at runtime; handle
-  connectivity failures. No runtime language package installation.
+- The appliance is a minimal, rarely updated root: NixOS, K3s (with its own airgap
+  images) and the guest agent. Kite, the gateway and the demo are platform
+  workloads in `platform/`, embedded in the app, pushed to the agent on every start
+  and pulled at runtime by pinned digest. Never preload them into the appliance.
+  Offline first boot is not yet supported. Handle connectivity failures. No runtime
+  language package installation.
+- BEFORE PRODUCTION (v1.0.0): pin the K3s minor explicitly in nix/guest.nix
+  (`services.k3s.package = pkgs.k3s_1_xx`). It currently follows nixpkgs, so a
+  nixpkgs bump can silently change it. Also pin ext4 mkfs features for the data
+  disk template, and decide the data-disk filesystem (it is permanent once installed).
 - Management listeners remain loopback-only and authenticated. Workload gateways
   may bind configured LAN interfaces; never implicitly expose Kubernetes, Kite,
   Caddy administration or launcher control. Preserve vsock/per-boot mTLS and
@@ -49,5 +57,5 @@ in ROADMAP.md. Planned recovery features must not be described as implemented.
 
 Key files: main.go (host CLI/proxy), desktop.go (embedded bootstrap panel),
 bootstrap.go (pinned resumable downloads), storage.go (disk/backup), vm_*.go,
-nix/guest.nix and nix/kite.* (appliance), cmd/guest and internal/guest (guest agent),
+nix/guest.nix (appliance), platform/ (Kite/gateway/demo manifests), cmd/guest and internal/guest (guest agent),
 scripts/package.py and app.yml/appliance.yml/release.yml (independent releases).

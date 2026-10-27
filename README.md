@@ -99,8 +99,9 @@ DMG / EXE / AppImage                 Separate downloadable assets
   licenses                              QEMU + native libraries + licenses
 ```
 
-The immutable NixOS system image contains K3s/containerd, its airgap images,
-Kite's preloaded container image, and a small guest agent. There is no runtime
+The immutable NixOS system image contains K3s/containerd, its airgap images
+and a small guest agent. Kite, the gateway and the demo are platform workloads
+embedded in the app and pulled at runtime. There is no runtime
 `pip install` or `npm install`. K3s starts with SQLite, CoreDNS, Flannel and
 local-path storage; packaged Traefik, ServiceLB and metrics-server are disabled. Additional
 workloads and optional Kite plugins pull from registries as needed.
