@@ -6,7 +6,7 @@ import "slices"
 const Version = 1
 
 func Capabilities() []string {
-	return []string{"status", "logs", "stop", "kite-proxy", "workload-publication-v1"}
+	return []string{"status", "logs", "stop", "console-proxy", "platform-apply-v1", "workload-publication-v1"}
 }
 
 func Supports(version int, capabilities []string) bool {

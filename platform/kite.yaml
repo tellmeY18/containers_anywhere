@@ -55,8 +55,8 @@ spec:
       serviceAccountName: kite
       containers:
         - name: kite
-          image: containers-anywhere/kite:0.16.0
-          imagePullPolicy: Never
+          image: ghcr.io/kite-org/kite:v0.16.0@sha256:951616cbaf9ce7e1183450bb225114568a9fe5cb486b085e7399a4d453d1a19e
+          imagePullPolicy: IfNotPresent
           envFrom:
             - secretRef:
                 name: kite-secrets
@@ -84,7 +84,7 @@ spec:
         - name: data
           hostPath:
             path: /var/lib/containers-anywhere/kite
-            type: Directory
+            type: DirectoryOrCreate
         - name: config
           configMap:
             name: kite-config
@@ -94,6 +94,8 @@ kind: Service
 metadata:
   name: kite
   namespace: kite-system
+  labels:
+    containers-anywhere.dev/console: "true"
 spec:
   selector: {app: kite}
   ports:

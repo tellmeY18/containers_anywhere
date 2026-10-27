@@ -1,0 +1,185 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: containers-demo
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo-page
+  namespace: containers-demo
+data:
+  index.html: |
+    <!doctype html>
+    <html lang="en">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Containers Anywhere works</title>
+    <style>
+      :root{font-family:system-ui,sans-serif;color:#e2e8f0;background:#101827}
+      body{max-width:800px;margin:8vh auto;padding:24px;line-height:1.6}
+      .brand{color:#6ee7b7;font-weight:700;letter-spacing:.06em}
+      h1{font-size:clamp(2rem,7vw,3.5rem);line-height:1.15}
+      .flow{border:1px solid #475569;border-radius:12px;padding:20px;background:#172234}
+      code{overflow-wrap:anywhere;color:#6ee7b7}
+      li{margin:.7rem 0}small{color:#cbd5e1}
+    </style>
+    <main>
+      <p class="brand">CONTAINERS ANYWHERE</p>
+      <h1>Containers Anywhere works.</h1>
+      <p>Your browser reached a real workload running inside the appliance.</p>
+      <p class="flow">Browser → native Caddy → authenticated VM bridge → Traefik → demo Caddy pod</p>
+      <p>This page is served by a Kubernetes Deployment, not by the desktop
+      launcher. It loads no external fonts, scripts or images.</p>
+      <h2>Bring your own workload</h2>
+      <ol>
+        <li>Deploy your application and a Kubernetes Service through Kite or your workload manager.</li>
+        <li>Have the appliance owner approve your namespace and hostname suffix.</li>
+        <li>Create an Ingress with <code>ingressClassName: containers-anywhere</code>.
+        The appliance provides local HTTPS; Traefik routes requests to your Service.</li>
+      </ol>
+      <h2>What this page proves</h2>
+      <p>A successful request proves the application traffic path is responding.
+      Reaching it from a second device using <code>demo.local</code>, without a hosts
+      override, additionally exercises LAN reachability and name resolution.</p>
+      <p>This non-sensitive demo is also available over HTTP so a new device can
+      verify connectivity before certificate enrollment. Applications use HTTPS.
+      To enable trusted HTTPS, obtain <a href="/root.crt">this installation's public
+      CA certificate</a> from your appliance administrator and install it through
+      your device's trust settings. Verify its identity with the administrator;
+      an HTTP download alone does not authenticate a certificate.</p>
+      <small>No telemetry. No credentials. No patient data. This public demo is not a
+      management console or a production-readiness certification.</small>
+    </main>
+    </html>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo
+  namespace: containers-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: containers-demo
+  template:
+    metadata:
+      labels:
+        app: containers-demo
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: docker.io/library/caddy:2.11.7-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f
+          imagePullPolicy: IfNotPresent
+          command: [caddy, file-server, --listen, ":8080", --root, /www]
+          env:
+            - {name: XDG_CONFIG_HOME, value: /tmp/config}
+            - {name: XDG_DATA_HOME, value: /tmp/data}
+          volumeMounts:
+            - {name: page, mountPath: /www, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+          ports:
+            - name: web
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: web
+          livenessProbe:
+            httpGet:
+              path: /
+              port: web
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 96Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: page
+          configMap:
+            name: demo-page
+        - name: tmp
+          emptyDir: {sizeLimit: 16Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo
+  namespace: containers-demo
+spec:
+  selector:
+    app: containers-demo
+  ports:
+    - name: web
+      port: 80
+      targetPort: web
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: demo
+  namespace: containers-demo
+spec:
+  ingressClassName: containers-anywhere
+  rules:
+    - host: demo.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: demo
+                port:
+                  number: 80
+    - host: demo.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: demo
+                port:
+                  number: 80
+---
+apiVersion: networking.containersanywhere.dev/v1alpha1
+kind: WorkloadPublication
+metadata:
+  name: demo
+  namespace: containers-demo
+spec:
+  ingressRef: demo
+  hostname: demo.local
+  lan: true
+  mdns: true
+  tls:
+    mode: LocalCA
+---
+apiVersion: networking.containersanywhere.dev/v1alpha1
+kind: WorkloadPublication
+metadata:
+  name: demo-localhost
+  namespace: containers-demo
+spec:
+  ingressRef: demo
+  hostname: demo.localhost
+  lan: false
+  mdns: false
+  tls:
+    mode: LocalCA

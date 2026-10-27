@@ -3,9 +3,7 @@ package guest
 import (
 	"context"
 	"crypto/tls"
-	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -13,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"time"
 
 	"github.com/mdlayher/vsock"
@@ -22,9 +19,6 @@ import (
 )
 
 func Main() error {
-	if len(os.Args) == 3 && os.Args[2] == "init-kite" {
-		return initKiteSecrets("/var/lib")
-	}
 	var listener net.Listener
 	var err error
 	credentials, err := os.ReadFile("/sys/firmware/qemu_fw_cfg/by_name/opt/containers-anywhere/tls/raw")
@@ -46,7 +40,7 @@ func Main() error {
 	go gateway.refresh(context.Background())
 	gateway.routes(mux)
 	mux.HandleFunc("GET /_agent/logs", func(w http.ResponseWriter, r *http.Request) {
-		cmd := exec.CommandContext(r.Context(), "journalctl", "--no-pager", "-n", "200", "-u", "k3s", "-u", "kite-secrets", "-u", "kite-forward", "-u", "containers-agent")
+		cmd := exec.CommandContext(r.Context(), "journalctl", "--no-pager", "-n", "200", "-u", "k3s", "-u", "console-forward", "-u", "containers-agent")
 		cmd.Stdout, cmd.Stderr = w, w
 		_ = cmd.Run()
 		// Journals alone miss terminal pod states and service endpoints. Fixed,
@@ -68,12 +62,28 @@ func Main() error {
 		k3s := exec.CommandContext(ctx, "k3s", "kubectl", "--kubeconfig=/etc/rancher/k3s/k3s.yaml", "get", "--raw=/readyz").Run() == nil
 		client := http.Client{Timeout: 3 * time.Second}
 		resp, err := client.Get("http://127.0.0.1:8081/healthz")
-		kite := err == nil && resp.StatusCode == 200
+		console := err == nil && resp.StatusCode == 200
 		if resp != nil {
 			resp.Body.Close()
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"healthy": k3s && kite, "k3s": k3s, "kite": kite, "protocol": protocol.Version, "capabilities": protocol.Capabilities()})
+		json.NewEncoder(w).Encode(map[string]any{"healthy": k3s, "k3s": k3s, "console": console, "protocol": protocol.Version, "capabilities": protocol.Capabilities()})
+	})
+	mux.HandleFunc("PUT /_agent/platform", func(w http.ResponseWriter, r *http.Request) {
+		var req platformRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPlatformTotal+(256<<10))).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := req.validate(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := applyPlatform("/var/lib", req); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		io.WriteString(w, "Platform applied\n")
 	})
 	mux.HandleFunc("POST /_agent/stop", func(w http.ResponseWriter, r *http.Request) {
 		if err := exec.Command("systemd-run", "--unit=containers-shutdown", "--on-active=2s", "--timer-property=AccuracySec=100ms", "systemctl", "poweroff", "--no-block").Run(); err != nil {
@@ -86,34 +96,4 @@ func Main() error {
 	target, _ := url.Parse("http://127.0.0.1:8081")
 	mux.Handle("/", httputil.NewSingleHostReverseProxy(target))
 	return (&http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}).Serve(listener)
-}
-
-// The kite-secrets oneshot is the sole writer, ordered before K3s. Keep the
-// existing Python-generated key file format so restarts never rotate identity.
-func initKiteSecrets(varLib string) error {
-	keys := filepath.Join(varLib, "containers-anywhere/kite-secrets.json")
-	data := map[string]string{}
-	b, err := os.ReadFile(keys)
-	if os.IsNotExist(err) {
-		data["JWT_SECRET"], data["KITE_ENCRYPT_KEY"] = randomToken(), randomToken()
-		if err = saveJSON(keys, data); err != nil {
-			return err
-		}
-	} else if err != nil {
-		return err
-	} else if err = json.Unmarshal(b, &data); err != nil {
-		return fmt.Errorf("invalid persisted Kite keys: %w", err)
-	}
-	for _, key := range []string{"JWT_SECRET", "KITE_ENCRYPT_KEY"} {
-		decoded, err := hex.DecodeString(data[key])
-		if err != nil || len(decoded) != 32 {
-			return fmt.Errorf("invalid persisted Kite key %s; refusing to regenerate", key)
-		}
-	}
-	return saveJSON(filepath.Join(varLib, "rancher/k3s/server/manifests/00-kite-secrets.json"), map[string]any{
-		"apiVersion": "v1", "kind": "List", "items": []any{
-			map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]string{"name": "kite-system"}},
-			map[string]any{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]string{"name": "kite-secrets", "namespace": "kite-system"}, "stringData": data},
-		},
-	})
 }

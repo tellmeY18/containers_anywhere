@@ -22,13 +22,26 @@ let
     ldflags = [ "-s" "-w" ];
     doCheck = false;
   };
-  kite = import ./kite.nix { inherit pkgs; };
-  gateway = import ./traefik.nix { inherit pkgs; };
-  demo = import ./demo.nix { inherit pkgs; };
+  consoleForward = pkgs.writeShellScript "console-forward" ''
+    set -eu
+    kubectl() { ${config.services.k3s.package}/bin/k3s kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml "$@"; }
+    target=$(kubectl get service -A -l containers-anywhere.dev/console=true \
+      -o 'jsonpath={.items[0].metadata.namespace} {.items[0].metadata.name} {.items[0].spec.ports[0].port}')
+    set -- $target
+    [ $# -eq 3 ] || { echo "no console service is published yet" >&2; exit 1; }
+    exec ${config.services.k3s.package}/bin/k3s kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml \
+      -n "$1" port-forward --address=127.0.0.1 "service/$2" "8081:$3"
+  '';
 in
 {
-  imports = [ "${modulesPath}/profiles/minimal.nix" "${modulesPath}/profiles/headless.nix" ];
-  system.stateVersion = "25.05";
+  # perlless replaces Perl activation with userborn and an /etc overlay, and
+  # fails the build if any Perl store path remains in the closure.
+  imports = [
+    "${modulesPath}/profiles/minimal.nix"
+    "${modulesPath}/profiles/headless.nix"
+    "${modulesPath}/profiles/perlless.nix"
+  ];
+  system.stateVersion = "26.05";
   networking.hostName = "containers-anywhere";
   nix.enable = false;
   system.switch.enable = false;
@@ -44,7 +57,7 @@ in
     gnugrep
     gnused
     procps
-    util-linux
+    util-linuxMinimal
   ]);
   # No interactive administration or physical-disk management in this appliance.
   programs.nano.enable = false;
@@ -55,6 +68,8 @@ in
   boot.bcache.enable = false;
   boot.kexec.enable = false;
   security.sudo.enable = false;
+  # No setuid/setgid wrappers: nothing in this appliance needs privilege escalation.
+  security.enableWrappers = false;
   microvm = {
     hypervisor = "qemu";
     mem = 4096;
@@ -91,43 +106,31 @@ in
     disable = [ "traefik" "servicelb" "metrics-server" ];
     extraFlags = [ "--write-kubeconfig-mode=0600" "--secrets-encryption" ];
     gracefulNodeShutdown.enable = true;
-    images = [ config.services.k3s.package.airgap-images kite gateway.image demo ];
-    manifests.kite.source = ./kite.yaml;
-    manifests.gateway.source = gateway.manifest;
+    # Only K3s's own system images are preloaded. Kite, the gateway and the demo
+    # are platform workloads applied by the host app and pulled at runtime.
+    images = [ config.services.k3s.package.airgap-images ];
     manifests.publication.source = ./publication.yaml;
-    manifests.demo.source = pkgs.writeText "demo.yaml" (builtins.replaceStrings
-      [ "@CADDY_VERSION@" ] [ pkgs.caddy.version ] (builtins.readFile ./demo.yaml));
   };
   # The root filesystem is disposable. Retain the node password across boots,
   # alongside the cluster database, containerd images and local-path volumes.
   systemd.tmpfiles.rules = [
     "d /var/lib/rancher/node 0700 root root -"
     "L+ /etc/rancher/node - - - - /var/lib/rancher/node"
-    "d /var/lib/containers-anywhere/kite 0700 root root -"
   ];
-  systemd.services.kite-secrets = {
-    before = [ "k3s.service" ];
-    requiredBy = [ "k3s.service" ];
-    after = [ "systemd-tmpfiles-setup.service" ];
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-      UMask = "0077";
-      ExecStart = "${agent}/bin/guest guest init-kite";
-    };
-  };
-  # A reconnecting local tunnel avoids NodePort/hostNetwork exposure and survives
-  # Kite pod replacement. Both HTTP and WebSocket upgrades use the guest agent.
-  systemd.services.kite-forward = {
+  # The management console is whichever Service carries the label below; the
+  # appliance does not know which application provides it. A reconnecting local
+  # tunnel avoids NodePort/hostNetwork exposure and survives pod replacement.
+  # Both HTTP and WebSocket upgrades use the guest agent.
+  systemd.services.console-forward = {
     wantedBy = [ "multi-user.target" ];
     after = [ "k3s.service" ];
     # Requires cancels our start job if K3s initially fails (e.g. DHCP has no
     # default route yet). Restart= cannot recover a job that never executed.
-    # Start independently and retry until the API and Kite pod are available.
+    # Start independently and retry until the API and a console Service are available.
     wants = [ "k3s.service" ];
     unitConfig.StartLimitIntervalSec = 0;
     serviceConfig = {
-      ExecStart = "${config.services.k3s.package}/bin/k3s kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml -n kite-system port-forward --address=127.0.0.1 service/kite 8081:8080";
+      ExecStart = consoleForward;
       Restart = "always";
       RestartSec = 5;
     };
