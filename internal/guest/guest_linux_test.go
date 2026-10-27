@@ -177,10 +177,13 @@ func TestPlatformRequestRejectsUnsafeInput(t *testing.T) {
 	}
 }
 
-func TestDataFormatStampsOnlyAnEmptyDisk(t *testing.T) {
+func TestDataFormatStampsADiskWithoutApplicationData(t *testing.T) {
 	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, "lost+found"), 0700); err != nil {
-		t.Fatal(err)
+	// lost+found plus directories that early boot services create before us.
+	for _, name := range []string{"lost+found", "systemd/network", "nixos"} {
+		if err := os.MkdirAll(filepath.Join(root, name), 0700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := initDataFormat(root); err != nil {
 		t.Fatal(err)
@@ -196,8 +199,11 @@ func TestDataFormatStampsOnlyAnEmptyDisk(t *testing.T) {
 
 func TestDataFormatRefusesWithoutModifyingTheDisk(t *testing.T) {
 	cases := map[string]func(root string){
-		"unmarked existing data": func(root string) {
-			os.MkdirAll(filepath.Join(root, "rancher"), 0700)
+		"unmarked cluster data": func(root string) {
+			os.MkdirAll(filepath.Join(root, "rancher/k3s/server/db"), 0700)
+		},
+		"unmarked application data": func(root string) {
+			os.MkdirAll(filepath.Join(root, "containers-anywhere/kite"), 0700)
 		},
 		"different contract": func(root string) {
 			atomicfile.WritePrivate(filepath.Join(root, dataFormatFile), []byte(`{"contract":"var-lib-v2"}`))

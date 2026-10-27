@@ -12,13 +12,16 @@ import (
 
 const dataFormatFile = "containers-anywhere/data-format.json"
 
+// Directories that only a previous appliance generation creates.
+var applicationData = []string{"rancher", "containers-anywhere"}
+
 type dataFormat struct {
 	Contract string `json:"contract"`
 }
 
-// initDataFormat runs before anything else writes to the data disk. It never
-// modifies existing data: it only stamps a brand-new, empty disk, and otherwise
-// refuses to continue unless the disk already carries the supported contract.
+// initDataFormat runs before the cluster or any application writes to the data
+// disk. It never modifies existing data: it only stamps a disk that holds no
+// cluster or application data, and otherwise refuses to continue unless the disk already carries the supported contract.
 func initDataFormat(varLib string) error {
 	path := filepath.Join(varLib, dataFormatFile)
 	b, err := os.ReadFile(path)
@@ -32,13 +35,14 @@ func initDataFormat(varLib string) error {
 	if !os.IsNotExist(err) {
 		return err
 	}
-	entries, err := os.ReadDir(varLib)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		if e.Name() != "lost+found" {
-			return fmt.Errorf("the data disk has existing contents (%s) but no format marker; refusing to start. Nothing was modified: use a new empty state directory", e.Name())
+	// Early boot services (networkd, systemd, NixOS) legitimately create their own
+	// directories under /var/lib before this runs, so "empty" cannot mean empty.
+	// What must never be adopted unmarked is existing cluster or application data.
+	for _, name := range applicationData {
+		if _, err := os.Lstat(filepath.Join(varLib, name)); err == nil {
+			return fmt.Errorf("the data disk already holds %s but has no format marker; refusing to start. Nothing was modified: use a new empty state directory", name)
+		} else if !os.IsNotExist(err) {
+			return err
 		}
 	}
 	b, err = json.Marshal(dataFormat{Contract: protocol.DataContract})

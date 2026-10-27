@@ -159,6 +159,9 @@ in
       Type = "oneshot";
       RemainAfterExit = true;
       UMask = "0077";
+      # A refusal must be readable on the console, where the launcher reports it.
+      StandardOutput = "journal+console";
+      StandardError = "journal+console";
       ExecStart = "${agent}/bin/guest guest init-data";
     };
   };
