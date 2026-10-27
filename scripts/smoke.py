@@ -195,13 +195,14 @@ def main():
             request(c["AppURL"]+endpoint, data=admin, opener=browser)
             assert json.loads(request(c["AppURL"]+"/api/v1/bootstrap", opener=browser))["setup"]["initialized"]
             assert b"local" in request(c["AppURL"]+"/api/v1/clusters", opener=browser)
-            if fresh and args.extended:
-                for namespace in ["cncm-system", "care"]:
-                    try:
-                        request(c["AppURL"]+"/api/v1/namespaces/_all/"+namespace, opener=browser)
-                        raise AssertionError(f"Fresh universal appliance preinstalled {namespace}")
-                    except urllib.error.HTTPError as e:
-                        assert e.code == 404, f"Cannot inspect fresh namespaces: {e}"
+            if fresh:
+                if args.extended:
+                    for namespace in ["cncm-system", "care"]:
+                        try:
+                            request(c["AppURL"]+"/api/v1/namespaces/_all/"+namespace, opener=browser)
+                            raise AssertionError(f"Fresh universal appliance preinstalled {namespace}")
+                        except urllib.error.HTTPError as e:
+                            assert e.code == 404, f"Cannot inspect fresh namespaces: {e}"
                 # This is a real additional workload, with a PVC whose contents
                 # must survive both reboot and an encrypted backup round trip.
                 resources = [
