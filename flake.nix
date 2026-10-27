@@ -1,7 +1,7 @@
 {
   description = "Containers Anywhere — downloadable K3s appliance";
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/75d3d33e5e727d548fb60e391cf23c2fd3cebd69";
+    nixpkgs.url = "github:NixOS/nixpkgs/718f670e845328e9c2cecdd832835712b2cbd065";
     microvm = {
       url = "github:microvm-nix/microvm.nix/a4251ae36520c59a31afc07ffc32aa4fd7f214d2";
       inputs.nixpkgs.follows = "nixpkgs";
