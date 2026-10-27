@@ -279,6 +279,38 @@ successfully before release. Physical LAN, certificate enrollment, long-lived
 streams, upload stress, suspend/wake and network changes still require dedicated
 acceptance; source changes and compile checks do not establish those results.
 
+## Client onboarding, certificate trust and firewalls
+
+Read `HostStatus.status.host.gateway` (see [HOST_API.md](HOST_API.md)) for the ports, bound addresses, the
+root-CA URL and its SHA-256 fingerprint. It reports whether the 8080/8443 fallback is in use. A `lan-check`
+request dials this computer's own LAN addresses and reports whether the HTTPS port accepts connections;
+it is **not** proof that another device can reach the gateway.
+
+**Trusting the CA on a client.** Download the public root from `http://<lan-ip>:<http-port>/root.crt`, then
+compare its SHA-256 fingerprint with the value the launcher or your manager shows over a *different* channel.
+Fetching the certificate over HTTP only is trust on first use; it does not authenticate the certificate. Install
+only the public `root.crt`, never a key. Applications use HTTPS; the demo is also published over HTTP only so a new
+device can test connectivity before enrolling.
+
+**Firewalls.** None of the following has been verified on every platform; treat it as what was observed:
+
+- *Ports.* The gateway prefers 80/443 and falls back to 8080/8443 when they cannot be bound. On Linux, binding below
+  1024 needs `CAP_NET_BIND_SERVICE` or `net.ipv4.ip_unprivileged_port_start`. A Windows 11 machine and macOS both
+  bound 80/443 as an ordinary user.
+- *Windows.* Defender Firewall prompts on the first inbound listener; allow it on **Private** networks. No firewall
+  rule is created automatically.
+- *macOS.* The Application Firewall may prompt for the bundled Caddy helper.
+- *Management stays private.* Kubernetes (6443), the guest agent (8080 inside the VM), Kite and launcher control were
+  not reachable from the LAN in testing; only the workload gateway ports were.
+
+**mDNS (`.local` names).** Announcements need multicast on UDP 5353. Wi-Fi client isolation and multicast filtering
+silently break them, and a machine running Apple Bonjour (`mDNSResponder`) also holds 5353. The demo uses the fixed
+names `demo.local` / `demo.localhost`, so **two appliances on one LAN claim the same name and conflict**; per-instance
+demo names would fix that.
+
+**Windows clients.** Tools built on Schannel (for example `curl.exe`) fail against a private CA with "revocation status
+is unknown" unless run with `--ssl-no-revoke`; browsers behave once the root is trusted.
+
 ## Remaining product work
 
 - Implement per-platform firewall/80/443 setup and network-profile enrollment.
