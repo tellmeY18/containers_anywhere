@@ -299,9 +299,20 @@ device can test connectivity before enrolling.
   bound 80/443 as an ordinary user.
 - *Windows.* Defender Firewall prompts on the first inbound listener; allow it on **Private** networks. No firewall
   rule is created automatically.
-- *macOS.* The Application Firewall may prompt for the bundled Caddy helper.
+- *macOS.* The Application Firewall may prompt for the bundled Caddy helper. More importantly,
+  **System Settings > Privacy & Security > Local Network** must allow Containers Anywhere. If it was
+  denied (or the prompt was dismissed), macOS silently drops inbound LAN connections and multicast: the
+  gateway looks healthy and everything works from the Mac itself, but no other device can reach it. The app is
+  ad-hoc signed, so a new build is a new identity and macOS may ask again; after changing the setting, quit and
+  relaunch the app so the gateway restarts under the new permission.
 - *Management stays private.* Kubernetes (6443), the guest agent (8080 inside the VM), Kite and launcher control were
   not reachable from the LAN in testing; only the workload gateway ports were.
+
+**When a device cannot resolve the name.** The gateway is name-based, so `https://<ip>` always fails; use the name.
+The public root can be downloaded by address (`http://<lan-ip>:<http-port>/root.crt`; before 0.3.1 only when the
+`Host` header is `demo.local`). If `.local` does not resolve on a device (Android apps and many Linux setups
+without `avahi`/`nss-mdns`; any network that filters multicast), add `<lan-ip> demo.local` to that device's hosts
+file after trusting the root, or use a name you control.
 
 **mDNS (`.local` names).** Announcements need multicast on UDP 5353. Wi-Fi client isolation and multicast filtering
 silently break them, and a machine running Apple Bonjour (`mDNSResponder`) also holds 5353. The demo uses the fixed

@@ -262,3 +262,39 @@ func TestBackupWaitsForGatewayAndRefusesMissingCA(t *testing.T) {
 		t.Fatal("regenerated missing CA key")
 	}
 }
+
+func TestGatewayServesThePublicRootCAByAnyHostButNothingElse(t *testing.T) {
+	state := t.TempDir()
+	pki := filepath.Join(state, "gateway", "caddy", "pki", "authorities", "local")
+	if err := os.MkdirAll(pki, 0700); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(pki, "root.crt"), []byte("public certificate"), 0600)
+	os.WriteFile(filepath.Join(pki, "root.key"), []byte("PRIVATE KEY"), 0600)
+	g := &gateway{state: state, hosts: []string{"demo.local"}, publications: []publication.Record{testPublication("demo.local")}}
+	called := false
+	h := g.bridgeHandler("secret", "127.0.0.1:1234", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true; w.WriteHeader(204) }))
+	for _, tc := range []struct {
+		name, host, path, token, method string
+		status                          int
+		body                            string
+	}{
+		{"by LAN address", "192.168.220.12", "/root.crt", "secret", "GET", 200, "public certificate"},
+		{"by LAN address and port", "192.168.220.12:80", "/root.crt", "secret", "GET", 200, "public certificate"},
+		{"by published name", "demo.local", "/root.crt", "secret", "GET", 200, "public certificate"},
+		{"without the internal token", "192.168.220.12", "/root.crt", "", "GET", 403, ""},
+		{"wrong internal token", "192.168.220.12", "/root.crt", "guess", "GET", 403, ""},
+		{"only GET and HEAD", "192.168.220.12", "/root.crt", "secret", "POST", 403, ""},
+		{"never the private key", "192.168.220.12", "/root.key", "secret", "GET", 403, ""},
+		{"an unpublished host gets nothing else", "192.168.220.12", "/", "secret", "GET", 403, ""},
+	} {
+		called = false
+		r := httptest.NewRequest(tc.method, "http://"+tc.host+tc.path, nil)
+		r.Header.Set("X-CA-Gateway", tc.token)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != tc.status || called || (tc.body != "" && w.Body.String() != tc.body) || strings.Contains(w.Body.String(), "PRIVATE") {
+			t.Fatalf("%s: status=%d called=%t body=%q", tc.name, w.Code, called, w.Body.String())
+		}
+	}
+}

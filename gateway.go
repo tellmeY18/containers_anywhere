@@ -351,6 +351,15 @@ func (g *gateway) bridgeHandler(token, address string, proxy http.Handler) http.
 			}
 			return
 		}
+		// The root certificate is public, and a client that cannot resolve a .local
+		// name (the usual reason to need it) can only reach the gateway by address,
+		// so serve it for any Host. Only the internal token and GET/HEAD are accepted;
+		// everything else still requires a published hostname.
+		if r.URL.Path == "/root.crt" && (r.Method == "GET" || r.Method == "HEAD") && r.Header.Get("X-CA-Gateway") == token {
+			w.Header().Set("Content-Type", "application/x-x509-ca-cert")
+			http.ServeFile(w, r, filepath.Join(g.state, "gateway", "caddy", "pki", "authorities", "local", "root.crt"))
+			return
+		}
 		host := r.Host
 		if h, _, err := net.SplitHostPort(host); err == nil {
 			host = h
