@@ -91,3 +91,41 @@ func TestSmallSeedCreatesFullDiskWithoutOverwriting(t *testing.T) {
 		t.Fatal("reinitialized existing disk")
 	}
 }
+
+func TestK3sChangeClassification(t *testing.T) {
+	for _, tc := range []struct {
+		old, next          string
+		identical, upgrade bool
+	}{
+		{"1.35.8+k3s1", "1.35.8+k3s1", true, false},
+		{"1.35.8+k3s1", "1.35.9+k3s1", false, true},
+		{"1.35.8+k3s1", "1.35.8+k3s2", false, true},
+		{"1.35.8+k3s2", "1.35.8+k3s1", false, false},
+		{"1.35.9+k3s1", "1.35.8+k3s1", false, false},
+		{"1.35.8+k3s1", "1.36.0+k3s1", false, false},
+		{"1.35.8+k3s1", "2.35.8+k3s1", false, false},
+		{"1.35.8+k3s1", "1.35.8", false, false},
+		{"", "", false, false},
+		{"new-schema", "new-schema", true, false},
+	} {
+		identical, upgrade := k3sChange(tc.old, tc.next)
+		if identical != tc.identical || upgrade != tc.upgrade {
+			t.Errorf("%q -> %q: identical=%v upgrade=%v, want %v %v", tc.old, tc.next, identical, upgrade, tc.identical, tc.upgrade)
+		}
+	}
+}
+
+func TestUpdateAllowsOnlyForwardK3sPatchWithinAMinor(t *testing.T) {
+	_, m := testBundle(t)
+	for next, ok := range map[string]bool{
+		"1.35.0+k3s1": true, "1.35.4+k3s1": true, "1.35.0+k3s2": true,
+		"1.34.9+k3s1": false, "1.36.0+k3s1": false, "1.35.0+k3s0": false,
+	} {
+		n := m
+		n.K3s = next
+		err := updateDataCompatible(m, n)
+		if (err == nil) != ok {
+			t.Errorf("K3s %s -> %s: err=%v, want ok=%v", m.K3s, next, err, ok)
+		}
+	}
+}

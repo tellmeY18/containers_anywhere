@@ -101,6 +101,10 @@ in
   };
   services.k3s = {
     enable = true;
+    # The minor version is pinned: a K3s minor change needs its own tested upgrade
+    # path and must never ride in on a nixpkgs bump. Patch releases within the
+    # minor may move with the pinned nixpkgs revision.
+    package = pkgs.k3s_1_35;
     role = "server";
     nodeName = "containers-anywhere";
     disable = [ "traefik" "servicelb" "metrics-server" ];
@@ -141,5 +145,34 @@ in
     path = [ pkgs.systemd config.services.k3s.package ];
     serviceConfig = { ExecStart = "${agent}/bin/guest guest"; Restart = "on-failure"; };
   };
+  # Fail closed before anything writes to the data disk: the disk must be empty
+  # (a new install) or already carry the format marker this appliance supports.
+  systemd.services.data-format = {
+    description = "Verify the persistent data disk format";
+    wantedBy = [ "sysinit.target" ];
+    requiredBy = [ "systemd-tmpfiles-setup.service" "k3s.service" ];
+    before = [ "systemd-tmpfiles-setup.service" "k3s.service" "containers-agent.service" "shutdown.target" ];
+    after = [ "local-fs.target" ];
+    conflicts = [ "shutdown.target" ];
+    unitConfig.DefaultDependencies = false;
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      UMask = "0077";
+      ExecStart = "${agent}/bin/guest guest init-data";
+    };
+  };
+  # The data disk is created once by the host launcher and is never formatted,
+  # repartitioned or recreated by any root image.
+  assertions = [
+    {
+      assertion = !config.fileSystems."/var/lib".autoFormat;
+      message = "/var/lib must never be auto-formatted: the data disk is created once by the launcher.";
+    }
+    {
+      assertion = !config.systemd.repart.enable && !config.boot.initrd.systemd.repart.enable;
+      message = "systemd-repart must stay disabled: no root image may repartition or reformat the data disk.";
+    }
+  ];
   services.fstrim.enable = true;
 }

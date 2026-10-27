@@ -148,11 +148,12 @@ func updateDataCompatible(old, next manifest) error {
 	if err := validateLayers(next); err != nil {
 		return err
 	}
+	identical, upgrade := k3sChange(old.K3s, next.K3s)
 	if old.Arch != runtime.GOARCH || next.Arch != old.Arch ||
-		old.DataContract != "var-lib-v1" || next.DataContract != old.DataContract ||
-		old.K3s == "" || old.K3s != next.K3s ||
+		old.DataContract != protocol.DataContract || next.DataContract != old.DataContract ||
+		!(identical || upgrade) ||
 		old.DataBytes != next.DataBytes {
-		return errors.New("unsupported data contract: this update requires var-lib-v1, identical K3s version, architecture and disk geometry; reset required for unsupported changes: use a new empty state directory, never delete existing data")
+		return errors.New("unsupported data contract: this update requires var-lib-v1, the same K3s minor version (patch releases may only move forward), architecture and disk geometry; reset required for unsupported changes: use a new empty state directory, never delete existing data")
 	}
 	return nil
 }
@@ -193,6 +194,11 @@ func runUpdate(state, operation, candidate, original, destination string, port i
 	switch operation {
 	case "status":
 		j, err := readUpdate(state)
+		if os.IsNotExist(err) {
+			if s, swapErr := readSwap(state); swapErr == nil {
+				return json.NewEncoder(os.Stdout).Encode(s)
+			}
+		}
 		if err != nil {
 			return err
 		}
@@ -215,9 +221,11 @@ func runUpdate(state, operation, candidate, original, destination string, port i
 			_, err = os.Stdout.Write(b)
 		}
 		return err
+	case "swap":
+		return runSwap(state, candidate, original, port, noOpen)
 	case "prepare", "cancel", "recover":
 	default:
-		return errors.New("update operation must be prepare, activate, commit, cancel, recover or status")
+		return errors.New("update operation must be prepare, activate, commit, cancel, recover, swap or status")
 	}
 	unlock, err := updateLock(state, operation == "prepare")
 	if err != nil {
@@ -243,6 +251,9 @@ func runUpdate(state, operation, candidate, original, destination string, port i
 }
 
 func prepareUpdate(state, candidate, original string, h updateHooks) error {
+	if s, err := readSwap(state); err == nil && s.Phase == "trying" {
+		return errors.New("a root swap trial is pending; start the cluster normally to resolve it before preparing an update")
+	}
 	var resume *updateJournal
 	if old, err := readUpdate(state); err == nil {
 		if old.Phase == "preparing" {

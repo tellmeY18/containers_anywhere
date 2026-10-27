@@ -61,6 +61,66 @@ def cache_runtime(state, bundle, archive):
         (target / ".archive-sha256").write_text(digest)
 
 
+def swap_phase(state):
+    try:
+        return json.loads((state / "swap.json").read_text())["phase"]
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def unbootable_root(source, destination):
+    """A root image that passes every integrity check but cannot boot."""
+    destination.mkdir()
+    for name in ["initrd", "system.img", "data.img"]:
+        try:
+            os.link(source / name, destination / name)
+        except OSError:
+            shutil.copy2(source / name, destination / name)
+    garbage = b"not a kernel\n" * 64
+    (destination / "kernel").write_bytes(garbage)
+    manifest = json.loads((source / "manifest.json").read_text())
+    manifest["files"]["kernel"] = hashlib.sha256(garbage).hexdigest()
+    manifest["version"] += "-unbootable"
+    (destination / "manifest.json").write_text(json.dumps(manifest, indent=2))
+
+
+def swap_falls_back(binary, state, broken, bundle, timeout):
+    """The candidate cannot boot: the same session must reselect and serve the original root."""
+    original = json.loads((state / "release.json").read_text())
+    log = (state / "swap-fallback.log").open("w")
+    process = subprocess.Popen([str(binary), "update", "--operation", "swap", "--bundle", str(broken),
+                                "--original-bundle", str(bundle), "--state", str(state), "--port", "0", "--no-open"],
+                               stdout=log, stderr=log, env=dict(os.environ, CONTAINERS_NO_BROWSER="1"))
+    c = None
+    try:
+        wait_for(lambda: swap_phase(state) == "rolled-back", process, timeout)
+
+        def original_healthy():
+            nonlocal c
+            c = json.loads((state / "control.json").read_text())  # re-read: each session has its own token
+            status = json.loads(request(c["URL"] + "/control/status", c["Token"]))
+            return status.get("healthy") and status.get("console")
+        wait_for(original_healthy, process, timeout)
+        assert json.loads((state / "release.json").read_text()) == original, "Fallback did not reselect the original root"
+    finally:
+        if c and process.poll() is None:
+            try:
+                request(c["URL"] + "/control/stop", c["Token"], {})
+                process.wait(timeout=180)
+            except Exception as e:
+                print("Graceful shutdown failed:", e, flush=True)
+                process.terminate()
+                process.wait(timeout=180)
+        elif process.poll() is None:
+            process.terminate()
+            process.wait(timeout=180)
+        log.close()
+        if process.returncode not in (0, None):
+            print((state / "swap-fallback.log").read_text()[-4096:], flush=True)
+    assert process.returncode == 0, "The fallback session must exit cleanly"
+    print("PASS: an unbootable root falls back to the original root automatically, with the data untouched", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
@@ -73,8 +133,11 @@ def main():
     parser.add_argument("--boot-only", action="store_true", help="stop after the appliance reports healthy (machine/CPU configuration replay)")
     parser.add_argument("--extended", action="store_true", help="wider checks: full publication suite, demo redirect/certificate status, fresh-namespace inspection and the uncommitted-candidate retry boot")
     parser.add_argument("--download", action="store_true", help="fresh boot through the packaged launcher's actual public download pins")
+    parser.add_argument("--swap-bundle", type=Path, help="distinct root image with the same K3s for the root-swap drill: an unbootable candidate must fall back, then a good one must commit")
     parser.add_argument("--update-bundle", type=Path, help="distinct current data-contract appliance for explicit KVM update/recovery drill")
     args = parser.parse_args()
+    if args.swap_bundle and args.update_bundle:
+        parser.error("--swap-bundle and --update-bundle drill the same state; run one")
     binary, bundle, state = args.binary.resolve(), args.bundle.resolve(), args.state.resolve()
     state.mkdir()  # Never use existing user data.
     gateway_root = None
@@ -86,7 +149,7 @@ def main():
     timeout = int(os.environ.get("CONTAINERS_SMOKE_BOOT_SECONDS", "600"))
 
     def boot(directory, fresh=False, replacement=False, update=False, automatic=False, recovery_bundle=None,
-             commit=True, write_update_marker=False):
+             commit=True, write_update_marker=False, swap=None):
         label = "fresh" if fresh else "restart"
         log = (directory / (label + "-smoke.log")).open("w")
         selected_binary = args.replacement_binary.resolve() if replacement else binary
@@ -96,6 +159,9 @@ def main():
         command = launch_command(selected_binary, directory, selected_bundle)
         if update:
             command = [str(binary), "update", "--operation", "activate", "--accept-external-effects",
+                       "--state", str(directory), "--port", "0", "--no-open"]
+        if swap is not None:
+            command = [str(binary), "update", "--operation", "swap", "--bundle", str(swap), "--original-bundle", str(bundle),
                        "--state", str(directory), "--port", "0", "--no-open"]
         process = subprocess.Popen(command, stdout=log, stderr=log,
                                    env=dict(os.environ, CONTAINERS_NO_BROWSER="1"))
@@ -298,6 +364,25 @@ def main():
         print("PASS: replacement app retains exact appliance, Kite identity and PVC with no appliance download", flush=True)
     elif not args.update_bundle:
         boot(state)
+    if args.swap_bundle:
+        if not args.runtime_archive:
+            raise ValueError("Swap acceptance needs the app's exact pinned runtime archive")
+        cache_runtime(state, bundle, args.runtime_archive)
+        candidate = args.swap_bundle.resolve()
+        original_identity = json.loads((state / "release.json").read_text())
+        candidate_identity = json.loads((candidate / "manifest.json").read_text())
+        assert candidate_identity["system"] != original_identity["system"], "Swap drill needs a distinct built root image"
+        assert candidate_identity["k3s"] == original_identity["k3s"], "A root swap needs an identical K3s"
+        broken = state.parent / (state.name + "-unbootable")
+        unbootable_root(candidate, broken)
+        swap_falls_back(binary, state, broken, bundle, timeout)
+        assert swap_phase(state) == "rolled-back"
+        assert json.loads((state / "release.json").read_text()) == original_identity
+        boot(state, swap=candidate, write_update_marker=True)
+        assert swap_phase(state) == "committed", "A healthy candidate must commit"
+        assert json.loads((state / "release.json").read_text())["system"] == candidate_identity["system"]
+        boot(state, automatic=True)  # Ordinary start selects the committed root and keeps the data.
+        print("PASS: root swap with no data copy commits, and the new root keeps the data, login, CA and publication", flush=True)
     if args.update_bundle:
         if not args.runtime_archive:
             raise ValueError("Update restart acceptance needs the app's exact pinned runtime archive")

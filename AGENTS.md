@@ -27,10 +27,14 @@ in ROADMAP.md. Planned recovery features must not be described as implemented.
   and pulled at runtime by pinned digest. Never preload them into the appliance.
   Offline first boot is not yet supported. Handle connectivity failures. No runtime
   language package installation.
-- BEFORE PRODUCTION (v1.0.0): pin the K3s minor explicitly in nix/guest.nix
-  (`services.k3s.package = pkgs.k3s_1_xx`). It currently follows nixpkgs, so a
-  nixpkgs bump can silently change it. Also pin ext4 mkfs features for the data
-  disk template, and decide the data-disk filesystem (it is permanent once installed).
+- The K3s minor is pinned in nix/guest.nix (`pkgs.k3s_1_35`); a minor change needs
+  a tested upgrade path. Root-only changes use `update --operation swap`: it needs an
+  identical K3s, copies no data and falls back to the old root automatically. A K3s
+  patch release uses the full update transaction. The data disk carries a
+  `data-format.json` marker that the guest checks before anything writes to it, and no
+  root image may format it. BEFORE PRODUCTION (v1.0.0): pin the ext4 mkfs features of
+  the data disk template, decide the data-disk filesystem (permanent once installed),
+  and replace the cold-copy transaction with guest-side datastore snapshot/restore.
 - Management listeners remain loopback-only and authenticated. Workload gateways
   may bind configured LAN interfaces; never implicitly expose Kubernetes, Kite,
   Caddy administration or launcher control. Preserve vsock/per-boot mTLS and

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/tellmeY18/containers_anywhere/internal/atomicfile"
+	"github.com/tellmeY18/containers_anywhere/internal/protocol"
 )
 
 const testManifests = "rancher/k3s/server/manifests"
@@ -174,4 +175,66 @@ func TestPlatformRequestRejectsUnsafeInput(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDataFormatStampsOnlyAnEmptyDisk(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "lost+found"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := initDataFormat(root); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(root, dataFormatFile))
+	if err != nil || !strings.Contains(string(b), protocol.DataContract) {
+		t.Fatal("marker was not written", err)
+	}
+	if err := initDataFormat(root); err != nil {
+		t.Fatal("a stamped disk must be accepted again:", err)
+	}
+}
+
+func TestDataFormatRefusesWithoutModifyingTheDisk(t *testing.T) {
+	cases := map[string]func(root string){
+		"unmarked existing data": func(root string) {
+			os.MkdirAll(filepath.Join(root, "rancher"), 0700)
+		},
+		"different contract": func(root string) {
+			atomicfile.WritePrivate(filepath.Join(root, dataFormatFile), []byte(`{"contract":"var-lib-v2"}`))
+		},
+		"corrupt marker": func(root string) {
+			atomicfile.WritePrivate(filepath.Join(root, dataFormatFile), []byte(`{`))
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			setup(root)
+			before := listTree(t, root)
+			if err := initDataFormat(root); err == nil {
+				t.Fatal("accepted an incompatible data disk")
+			}
+			if after := listTree(t, root); after != before {
+				t.Fatalf("refusal modified the disk:\n%s\n---\n%s", before, after)
+			}
+		})
+	}
+}
+
+func listTree(t *testing.T, root string) string {
+	t.Helper()
+	var out []string
+	filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if err == nil {
+			rel, _ := filepath.Rel(root, p)
+			data := ""
+			if info.Mode().IsRegular() {
+				b, _ := os.ReadFile(p)
+				data = string(b)
+			}
+			out = append(out, rel+"|"+data)
+		}
+		return nil
+	})
+	return strings.Join(out, "\n")
 }

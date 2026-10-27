@@ -74,7 +74,7 @@ func run() error {
 	file := fs.String("file", "", "encrypted backup file")
 	key := fs.String("key", "", "recovery identity file")
 	noOpen := fs.Bool("no-open", false, "do not open a browser")
-	operation := fs.String("operation", "status", "update operation: prepare, activate, commit, cancel, recover, status")
+	operation := fs.String("operation", "status", "update operation: prepare, activate, commit, cancel, recover, swap, status")
 	originalBundle := fs.String("original-bundle", "", "exact selected bundle for update recovery (default: verified cache)")
 	destination := fs.String("destination", "", "new empty recovery destination")
 	acceptEffects := fs.Bool("accept-external-effects", false, "acknowledge candidate workloads can make irreversible external writes; no automatic rollback")
@@ -195,9 +195,15 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 		if err != nil {
 			return err
 		}
-	} else if err = checkUpdateStart(state); err != nil {
-		return err
+	} else {
+		if err = recoverSwap(state, updateHooks{}); err != nil {
+			return err
+		}
+		if err = checkUpdateStart(state); err != nil {
+			return err
+		}
 	}
+	swapAborted := currentSwapAbort()
 	retained := false
 	if bundle == "" {
 		if selected, readErr := readManifest(filepath.Join(state, "release.json")); readErr == nil {
@@ -405,6 +411,8 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 		case <-signals:
 			return vm.Close()
 		case <-done:
+			return vm.Close()
+		case <-swapAborted:
 			return vm.Close()
 		case healthy := <-ready:
 			if !healthy {

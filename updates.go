@@ -9,7 +9,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/tellmeY18/containers_anywhere/internal/protocol"
@@ -24,8 +26,8 @@ func validateLayers(m manifest) error {
 	return nil
 }
 
-// MVP deliberately pins existing data to its exact appliance. K3s upgrades and
-// rollbacks need a tested migration contract, not a version-string comparison.
+// Ordinary startup keeps existing data on its exact selected appliance. Changing
+// it goes only through an explicit update or swap, never through a version compare.
 func compatibleData(old, next manifest) bool {
 	return old.Format == 3 && next.Format == 3 && bundleID(old) == bundleID(next)
 }
@@ -88,4 +90,42 @@ func verifyRuntime(dir string) error {
 		}
 	}
 	return nil
+}
+
+type k3sVersion struct{ major, minor, patch, build int }
+
+var k3sVersionPattern = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)\+k3s(\d+)$`)
+
+func parseK3sVersion(s string) (k3sVersion, bool) {
+	m := k3sVersionPattern.FindStringSubmatch(s)
+	if m == nil {
+		return k3sVersion{}, false
+	}
+	var v [4]int
+	for i := range v {
+		n, err := strconv.Atoi(m[i+1])
+		if err != nil {
+			return k3sVersion{}, false
+		}
+		v[i] = n
+	}
+	return k3sVersion{v[0], v[1], v[2], v[3]}, true
+}
+
+// k3sChange classifies a K3s change between two appliances. Only an identical
+// version is a root-only change. Within a minor, patch/build releases may move
+// forward but never back. A different minor needs its own tested upgrade path.
+func k3sChange(old, next string) (identical, upgrade bool) {
+	if old != "" && old == next {
+		return true, false
+	}
+	a, ok1 := parseK3sVersion(old)
+	b, ok2 := parseK3sVersion(next)
+	if !ok1 || !ok2 || a.major != b.major || a.minor != b.minor {
+		return false, false
+	}
+	if b.patch != a.patch {
+		return false, b.patch > a.patch
+	}
+	return false, b.build > a.build
 }

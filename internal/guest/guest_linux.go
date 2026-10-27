@@ -19,6 +19,9 @@ import (
 )
 
 func Main() error {
+	if len(os.Args) == 3 && os.Args[2] == "init-data" {
+		return initDataFormat("/var/lib")
+	}
 	var listener net.Listener
 	var err error
 	credentials, err := os.ReadFile("/sys/firmware/qemu_fw_cfg/by_name/opt/containers-anywhere/tls/raw")

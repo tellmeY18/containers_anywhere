@@ -1,5 +1,24 @@
 # Explicit current-contract appliance updates
 
+## Root swap (no data copy, automatic fallback)
+
+```sh
+containers-anywhere update --operation swap --bundle /trusted/candidate/bundle \
+  --original-bundle /selected/bundle --state /cluster
+```
+
+A root swap replaces only the read-only root (kernel, initrd, system image). It needs
+an identical K3s version and the same data contract, so the previous root can always
+read the data again. It copies no data. The candidate is selected behind a durable
+`swap.json` (`trying`), then run against the existing data disk. If it is healthy
+(K3s and the console) within `CONTAINERS_SWAP_TIMEOUT` (default 10 minutes), it is
+committed. If the session fails, never becomes healthy, or the launcher crashes
+before a verdict, the original root is reselected, in the same session or at the next
+start, and the data disk is not rewound. Both roots are retained under
+`updates/swap-*`; nothing is pruned automatically. A K3s change is refused with a
+pointer to the full transaction below. The guest also refuses to start on a data disk
+without the matching `data-format.json`, and no root image may format the disk.
+
 Implemented in source, pending the platform acceptance gates below. App replacement
 continues to retain the selected appliance and data. Installing an app does not
 install its recommended appliance into an existing cluster.
@@ -13,7 +32,7 @@ commit. Gateway publication authorization remains unchanged.
 
 Both bundles must satisfy the launcher's current protocol/capability requirements,
 declare `data_contract: "var-lib-v1"`, and have identical architecture, data disk
-geometry, K3s version and Kite version. Version ordering/SemVer is not used to infer
+geometry and K3s minor version (a patch release may only move forward). Version ordering/SemVer is not used to infer
 data compatibility. This deliberately supports current-contract image changes,
 not K3s/Kite schema migrations. Missing or different contracts are rejected without
 deleting data; use a new empty state directory for unsupported changes.

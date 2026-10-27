@@ -197,7 +197,7 @@ jobs:
         with:
           name: update-candidate-amd64
           path: dist
-      - name: Linux KVM lifecycle acceptance (install, app replacement, backup/restore, appliance update)
+      - name: Linux KVM lifecycle acceptance (install, app replacement, backup/restore, root swap and fallback)
         if: matrix.platform == 'linux' && matrix.arch == 'amd64' && !(inputs.reuse_appliance && inputs.candidate_artifacts)
         shell: bash
         env:
@@ -221,7 +221,7 @@ jobs:
           if [ -f dist/update-candidate-amd64.tar.gz ]; then
             mkdir -p dist/update-candidate/bundle
             tar -xzf dist/update-candidate-amd64.tar.gz -C dist/update-candidate/bundle
-            extra+=(--update-bundle dist/update-candidate/bundle)
+            extra+=(--swap-bundle dist/update-candidate/bundle)
           fi
           python scripts/smoke.py --binary "$appdir/containers-anywhere" --replacement-binary "$appdir/replacement" --runtime-archive "$runtime" --bundle dist/acceptance/bundle --state dist/smoke --restore --gateway "${extra[@]}"
       # Windows WHPX has no hosted runner, so replay its machine/CPU pair under
