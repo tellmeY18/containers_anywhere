@@ -10,7 +10,7 @@ const Version = 1
 const DataContract = "var-lib-v1"
 
 func Capabilities() []string {
-	return []string{"status", "logs", "stop", "console-proxy", "platform-apply-v1", "workload-publication-v1"}
+	return []string{"status", "logs", "stop", "console-proxy", "platform-apply-v1", "workload-publication-v1", "host-api-v1"}
 }
 
 func Supports(version int, capabilities []string) bool {

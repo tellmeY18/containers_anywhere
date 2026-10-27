@@ -11,6 +11,7 @@ let
         ../internal/boottls
         ../internal/protocol
         ../internal/publication
+        ../internal/hostapi
         ../internal/atomicfile
         ../go.mod
         ../go.sum
@@ -120,7 +121,22 @@ in
   systemd.tmpfiles.rules = [
     "d /var/lib/rancher/node 0700 root root -"
     "L+ /etc/rancher/node - - - - /var/lib/rancher/node"
+    # The journal lives on the data disk so a forensic trail survives a reboot and
+    # can travel with a recovery kit. It is capped below, so it cannot fill the disk.
+    "d /var/lib/containers-anywhere/journal 0755 root root -"
+    "L+ /var/log/journal - - - - /var/lib/containers-anywhere/journal"
   ];
+  services.journald = {
+    storage = "persistent";
+    extraConfig = ''
+      SystemMaxUse=64M
+      SystemKeepFree=1G
+      SystemMaxFileSize=8M
+      MaxRetentionSec=14day
+    '';
+  };
+  # Flush the volatile journal only once the symlink above exists.
+  systemd.services.systemd-journal-flush.after = [ "systemd-tmpfiles-setup.service" ];
   # The management console is whichever Service carries the label below; the
   # appliance does not know which application provides it. A reconnecting local
   # tunnel avoids NodePort/hostNetwork exposure and survives pod replacement.

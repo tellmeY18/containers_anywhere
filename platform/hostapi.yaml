@@ -1,0 +1,282 @@
+# Host API: read-only host truth and approval-gated requests for workload managers.
+# Delivered by the app (platform layer), not baked into the appliance. The guest
+# agent reconciles these resources over the authenticated host channel; workloads
+# never receive a host capability token, and only the launcher UI approves requests.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: hoststatuses.host.containersanywhere.dev
+spec:
+  group: host.containersanywhere.dev
+  scope: Cluster
+  names:
+    plural: hoststatuses
+    singular: hoststatus
+    kind: HostStatus
+    shortNames: [hs]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Reported
+          type: string
+          jsonPath: '.status.conditions[?(@.type=="HostReported")].status'
+        - name: DiskPressure
+          type: string
+          jsonPath: '.status.conditions[?(@.type=="DiskPressure")].status'
+        - name: DiskFree
+          type: integer
+          jsonPath: .status.guest.disk.freeBytes
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-validations:
+            - rule: "self.metadata.name == 'host'"
+              message: HostStatus is a singleton named host.
+          properties:
+            apiVersion: {type: string}
+            kind: {type: string}
+            metadata: {type: object}
+            spec:
+              type: object
+              maxProperties: 0
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: hostrequests.host.containersanywhere.dev
+spec:
+  group: host.containersanywhere.dev
+  scope: Namespaced
+  names:
+    plural: hostrequests
+    singular: hostrequest
+    kind: HostRequest
+    shortNames: [hreq]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Type
+          type: string
+          jsonPath: .spec.type
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Reason
+          type: string
+          jsonPath: .status.reason
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            apiVersion: {type: string}
+            kind: {type: string}
+            metadata: {type: object}
+            spec:
+              type: object
+              required: [type]
+              x-kubernetes-validations:
+                - rule: "self.type != 'resources' || (has(self.resources) && !has(self.power) && !has(self.autostart))"
+                  message: A resources request carries only the resources parameters.
+                - rule: "self.type != 'power' || (has(self.power) && !has(self.resources) && !has(self.autostart))"
+                  message: A power request carries only the power parameters.
+                - rule: "self.type != 'autostart' || (has(self.autostart) && !has(self.resources) && !has(self.power))"
+                  message: An autostart request carries only the autostart parameters.
+                - rule: "!(self.type in ['prune-images', 'lan-check']) || (!has(self.resources) && !has(self.power) && !has(self.autostart))"
+                  message: This request type takes no parameters.
+              properties:
+                type:
+                  type: string
+                  enum: [resources, power, autostart, prune-images, lan-check]
+                reason:
+                  type: string
+                  maxLength: 256
+                resources:
+                  type: object
+                  required: [cpus, memoryMiB]
+                  properties:
+                    cpus:
+                      type: integer
+                      minimum: 2
+                      maximum: 64
+                    memoryMiB:
+                      type: integer
+                      minimum: 2048
+                      maximum: 262144
+                power:
+                  type: object
+                  required: [action]
+                  properties:
+                    action:
+                      type: string
+                      enum: [shutdown, restart-appliance]
+                autostart:
+                  type: object
+                  required: [enabled]
+                  properties:
+                    enabled:
+                      type: boolean
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, Approved, Rejected, Applied, Failed, Expired]
+                observedGeneration:
+                  type: integer
+                  format: int64
+                reason: {type: string}
+                message: {type: string}
+                updatedAt: {type: string}
+                result:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: hostregistrytrusts.host.containersanywhere.dev
+spec:
+  group: host.containersanywhere.dev
+  scope: Cluster
+  names:
+    plural: hostregistrytrusts
+    singular: hostregistrytrust
+    kind: HostRegistryTrust
+    shortNames: [hrt]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Endpoint
+          type: string
+          jsonPath: .spec.endpoint
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Reason
+          type: string
+          jsonPath: .status.reason
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            apiVersion: {type: string}
+            kind: {type: string}
+            metadata: {type: object}
+            spec:
+              type: object
+              required: [endpoint, plainHTTP]
+              properties:
+                endpoint:
+                  description: A loopback or node address with a port, for example 127.0.0.1:30500. No names, wildcards, schemes or paths.
+                  type: string
+                  maxLength: 64
+                  pattern: '^(localhost|[0-9]{1,3}(\.[0-9]{1,3}){3}|\[[0-9a-fA-F:]+\]):[1-9][0-9]{0,4}$'
+                plainHTTP:
+                  description: The registry is reached over plain HTTP. HTTPS with a private CA is not supported yet, so this must be true.
+                  type: boolean
+                description:
+                  type: string
+                  maxLength: 256
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Trusted, Rejected, Revoked]
+                observedGeneration:
+                  type: integer
+                  format: int64
+                reason: {type: string}
+                message: {type: string}
+                updatedAt: {type: string}
+---
+# Workloads read host truth; they never write it. Administrators bind these roles
+# explicitly with a RoleBinding or ClusterRoleBinding to named service accounts.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: containers-host-reader
+rules:
+  - apiGroups: [host.containersanywhere.dev]
+    resources: [hoststatuses, hostregistrytrusts]
+    verbs: [get, list, watch]
+---
+# Requests are created in the requester's own namespace and read back. A request
+# cannot be edited after creation and its status is written only by the host.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: containers-host-requester
+rules:
+  - apiGroups: [host.containersanywhere.dev]
+    resources: [hostrequests]
+    verbs: [get, list, watch, create, delete]
+---
+# Only the guest agent's identity (the node's admin client certificate) writes host
+# status. Cluster administrators editing it by hand would make it a lie.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: containers-host-status-writer
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [host.containersanywhere.dev]
+        apiVersions: [v1alpha1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [hoststatuses, hoststatuses/status, hostrequests/status, hostregistrytrusts/status]
+  validations:
+    - expression: "request.userInfo.username == 'system:admin'"
+      message: Host status and request status are written only by the appliance's host bridge.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: containers-host-status-writer
+spec:
+  policyName: containers-host-status-writer
+  validationActions: [Deny]
+---
+# What the human approved must be exactly what is applied: the spec of a request
+# is immutable once created.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: containers-host-request-immutable
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [host.containersanywhere.dev]
+        apiVersions: [v1alpha1]
+        operations: [UPDATE]
+        resources: [hostrequests]
+  validations:
+    - expression: "object.spec == oldObject.spec"
+      message: A host request cannot be changed after it is created; create a new one.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: containers-host-request-immutable
+spec:
+  policyName: containers-host-request-immutable
+  validationActions: [Deny]
