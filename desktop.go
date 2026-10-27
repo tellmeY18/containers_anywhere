@@ -119,6 +119,7 @@ func desktop(state, bundle string) error {
 	}
 	defer os.Remove(filepath.Join(state, "desktop.json"))
 	var mu, operation sync.Mutex
+	store := newStoreService(state)
 	var child *exec.Cmd
 	var childDone chan struct{}
 	phase, detail := "stopped", "Your cluster is stopped. Data stays on this computer."
@@ -299,6 +300,36 @@ func desktop(state, bundle string) error {
 			}
 			return
 		}
+		if r.Method == "GET" && r.URL.Path == "/store" {
+			w.Header().Set("Content-Type", "application/json")
+			catalog := store.Get()
+			if catalog.Entries == nil {
+				catalog.Entries = []storeEntry{}
+			}
+			json.NewEncoder(w).Encode(map[string]any{"catalog": catalog, "loading": store.Loading(), "installed": append([]storeInstalled{}, readInstalled(state)...)})
+			return
+		}
+		if r.Method == "GET" && r.URL.Path == "/store/review" {
+			entry, ok := store.Entry(r.URL.Query().Get("repo"))
+			if !ok {
+				http.Error(w, "unknown repository", 404)
+				return
+			}
+			content, err := store.Fetch(r.Context(), entry)
+			if err != nil {
+				http.Error(w, err.Error(), 502)
+				return
+			}
+			fresh := entryFor(githubRepo{FullName: entry.Repo, Description: entry.Description, HTMLURL: entry.URL, DefaultBranch: entry.Branch, Stars: entry.Stars, PushedAt: entry.Updated}, entry.Path, content)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"repo": fresh.Repo, "url": entry.URL, "manifestURL": entry.manifestURL(), "sha256": fresh.SHA256, "bytes": fresh.Bytes, "risk": fresh.Risk, "summary": fresh.Summary, "content": string(content)})
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/store/refresh" {
+			go store.Refresh()
+			io.WriteString(w, "Refreshing")
+			return
+		}
 		if r.Method != "POST" {
 			http.Error(w, "method", 405)
 			return
@@ -398,6 +429,34 @@ func desktop(state, bundle string) error {
 			if err == nil {
 				_, err = controlCall(cc, "POST", "/control/host/requests/"+body.UID+"/"+strings.TrimPrefix(r.URL.Path, "/host/"), nil, 30*time.Second)
 			}
+		case "/store/install":
+			var body struct {
+				Repo   string `json:"repo"`
+				SHA256 string `json:"sha256"`
+			}
+			if json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body) != nil || !validRepoName(body.Repo) || len(body.SHA256) != 64 {
+				err = errors.New("invalid request")
+				break
+			}
+			entry, ok := store.Entry(body.Repo)
+			if !ok {
+				err = errors.New("unknown repository")
+				break
+			}
+			var content []byte
+			if content, err = store.Fetch(r.Context(), entry); err != nil {
+				break
+			}
+			if hashOf(content) != body.SHA256 {
+				err = errors.New("the manifest changed since you reviewed it; review it again")
+				break
+			}
+			var payload []byte
+			payload, _ = json.Marshal(storeApplyRequest{Repo: entry.Repo, Path: entry.Path, SHA256: body.SHA256, Content: string(content)})
+			var cc control
+			if cc, err = readControl(state); err == nil {
+				_, err = controlCall(cc, "POST", "/control/store/apply", payload, 60*time.Second)
+			}
 		case "/update/cancel":
 			err = runUpdate(state, "cancel", "", "", "", 0, true, false, false, false)
 		case "/stop":
@@ -459,6 +518,7 @@ const desktopHTML = `<!doctype html><html lang="en"><meta charset="utf-8"><meta 
 <p id="gateway-status" role="status"></p>
 <div id="workloads"></div>
 <h2>Requests</h2><div id="requests" role="status"></div>
+<h2>Store</h2><p><small>Community deployments found on GitHub (topic containers-anywhere). Nothing here is verified: installing one runs its publisher's code on your cluster.</small></p><div id="store" role="status"></div><button id="store-refresh">Refresh list</button>
 <p id="update-status" role="status"></p>
 <button id="update-prepare">Prepare appliance update</button><button id="update-activate" hidden>Activate / retry candidate</button><button id="update-commit" hidden>Commit validated update</button><button id="update-cancel" hidden>Cancel preparation</button>
 <button id="setup" hidden>Set up this computer</button><button id="restart" hidden>Restart Windows now</button>
@@ -472,4 +532,8 @@ for(let op of ['prepare','activate','commit','cancel'])document.getElementById('
 for(let name of ['start','stop','quit','logs','setup','restart'])document.getElementById(name).onclick=async()=>{if(name==='restart'&&!confirm('Save your work first. Restart Windows now?'))return;try{let text=await call(name,name==='logs'?'GET':'POST');document.getElementById('output').textContent=text}catch(e){document.getElementById('output').textContent=e.message}};poll();
 let hostText={resources:r=>'Resize the appliance to '+r.resources.cpus+' CPUs and '+r.resources.memoryMiB+' MiB of memory (takes effect at the next restart)',power:r=>'Appliance: '+r.power.action,autostart:r=>(r.autostart.enabled?'Start':'Do not start')+' Containers Anywhere automatically at login','prune-images':r=>'Remove unused container images (volumes and images in use are never touched)','lan-check':r=>'Check this computer\'s network addresses'};
 async function loadRequests(){try{let d=JSON.parse(await call('host/requests'));let box=document.getElementById('requests');box.replaceChildren();let list=d.pending||[];if(!list.length){box.textContent='No requests are waiting.';return}for(let r of list){let row=document.createElement('p');let who=document.createElement('strong');who.textContent=r.namespace+'/'+r.name;let what=(hostText[r.spec.type]||(()=>r.spec.type))(r.spec);row.append(who,' asks: ',what);if(r.spec.reason){let why=document.createElement('small');why.textContent=' ('+r.spec.reason+')';row.append(why)}for(let verb of ['approve','reject']){let b=document.createElement('button');b.textContent=verb==='approve'?'Approve':'Reject';b.onclick=async()=>{if(verb==='approve'&&!confirm('Approve this request?\n\n'+what))return;try{await call('host/'+verb,'POST',{uid:r.uid})}catch(e){document.getElementById('output').textContent=e.message}loadRequests()};row.append(' ',b)}box.append(row)}}catch(e){}}
-setInterval(loadRequests,4000);loadRequests();</script></html>`
+function storeLine(box,text,small){let p=document.createElement(small?'small':'p');p.textContent=text;box.appendChild(p);if(small)box.appendChild(document.createElement('br'))}
+async function installEntry(e){try{let r=JSON.parse(await call('store/review?repo='+encodeURIComponent(e.repo)));let lines=['Install '+r.repo+' (UNVERIFIED)?','','Risk: '+r.risk,'Resources: '+r.summary.kinds.join(', '),'Namespaces: '+(r.summary.namespaces.join(', ')||'none'),'Images: '+(r.summary.images.join(', ')||'none')];for(let k of r.summary.risks)lines.push((k.level==='high'?'HIGH: ':'Note: ')+k.text);lines.push('','Manifest: '+r.manifestURL,'SHA-256: '+r.sha256,'','Installing gives its publisher the access above. Read the manifest first.');if(!confirm(lines.join('\n')))return;if(r.risk==='high'&&prompt('This is high risk. Type the repository name to continue: '+r.repo)!==r.repo)return;await call('store/install','POST',{repo:r.repo,sha256:r.sha256});document.getElementById('output').textContent='Installed '+r.repo+'. It may take a few minutes to start; follow it in Kite.';loadStore()}catch(x){document.getElementById('output').textContent=x.message}}
+async function loadStore(){try{let d=JSON.parse(await call('store'));let box=document.getElementById('store');box.replaceChildren();let have={};for(let i of d.installed)have[i.repo]=i;let list=d.catalog.entries;if(!list.length)storeLine(box,d.loading?'Looking for deployments on GitHub…':(d.catalog.error||'No deployments found yet.'));else if(d.catalog.error)storeLine(box,d.catalog.error,true);for(let e of list){let row=document.createElement('p');let b=document.createElement('strong');b.textContent=e.repo;row.appendChild(b);row.appendChild(document.createElement('br'));let t=document.createElement('small');t.textContent=(e.description||'No description')+' | unverified | risk: '+e.risk+(e.stars?' | '+e.stars+' stars':'')+(e.archived?' | archived':'')+(e.fork?' | fork':'');row.appendChild(t);row.appendChild(document.createElement('br'));if(have[e.repo]){let s=document.createElement('small');s.textContent='Installed '+have[e.repo].installedAt;row.appendChild(s)}else if(e.risk==='blocked'){let s=document.createElement('small');s.textContent='Cannot be installed: '+(e.summary.blocked[0]||'blocked');row.appendChild(s)}else{let bt=document.createElement('button');bt.textContent='Review and install';bt.onclick=()=>installEntry(e);row.appendChild(bt)}box.appendChild(row)}}catch(x){document.getElementById('store').textContent=x.message}}
+document.getElementById('store-refresh').onclick=async()=>{try{await call('store/refresh','POST');setTimeout(loadStore,1500)}catch(x){document.getElementById('output').textContent=x.message}};
+setInterval(loadRequests,4000);loadRequests();setInterval(loadStore,15000);loadStore();</script></html>`

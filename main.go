@@ -351,6 +351,19 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 			io.WriteString(w, "Candidate committed; local recovery point retained.\n")
 			return
 		}
+		if name == "store/apply" && r.Method == "POST" {
+			var req storeApplyRequest
+			if json.NewDecoder(io.LimitReader(r.Body, storeMaxManifest+4096)).Decode(&req) != nil {
+				http.Error(w, "invalid request", 400)
+				return
+			}
+			if _, err := applyStoreManifest(r.Context(), client, state, req); err != nil {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			io.WriteString(w, "ok\n")
+			return
+		}
 		if strings.HasPrefix(name, "host") && bridge == nil {
 			http.Error(w, "This appliance predates the host API; update the appliance to use it.", http.StatusNotFound)
 			return
