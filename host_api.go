@@ -25,6 +25,7 @@ import (
 
 	"github.com/tellmeY18/containers_anywhere/internal/diskspace"
 	"github.com/tellmeY18/containers_anywhere/internal/hostapi"
+	"github.com/tellmeY18/containers_anywhere/internal/protocol"
 )
 
 // The host bridge is the launcher's half of the generic host API. It pushes facts
@@ -37,6 +38,9 @@ var (
 	hostPower        = make(chan string, 1)
 	restartAfterStop atomic.Bool
 )
+
+// hostAPISupported reports whether the selected appliance advertises the bridge.
+func hostAPISupported(m manifest) bool { return protocol.Has(m.Capabilities, "host-api-v1") }
 
 func triggerPower(action string) {
 	if action == "restart-appliance" {

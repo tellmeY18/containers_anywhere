@@ -129,3 +129,26 @@ func TestUpdateAllowsOnlyForwardK3sPatchWithinAMinor(t *testing.T) {
 		}
 	}
 }
+
+func TestAnApplianceWithoutTheHostAPIStillRunsAndCanBeUpdated(t *testing.T) {
+	_, old := testBundle(t)
+	old.Capabilities = []string{"status", "logs", "stop", "console-proxy", "platform-apply-v1", "workload-publication-v1"}
+	if err := validateLayers(old); err != nil {
+		t.Fatalf("a published 0.2.0 appliance must stay launchable by a newer app: %v", err)
+	}
+	if hostAPISupported(old) {
+		t.Fatal("the bridge must stay off for an appliance that does not advertise it")
+	}
+	next := old
+	next.System = "/nix/store/newer"
+	next.Capabilities = append(append([]string{}, old.Capabilities...), "host-api-v1")
+	if err := updateDataCompatible(old, next); err != nil {
+		t.Fatalf("updating from an earlier appliance to one with the host API must work: %v", err)
+	}
+	if err := swapEligible(old, next); err != nil {
+		t.Fatalf("and so must a root swap: %v", err)
+	}
+	if !hostAPISupported(next) {
+		t.Fatal("the new appliance advertises the host API")
+	}
+}

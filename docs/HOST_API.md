@@ -26,8 +26,12 @@ authenticated vsock/mTLS channel, with status written back under `uid` and
 | Bridge (reads/patches resources) | guest agent, `internal/hostapi` | The only component that talks to the Kubernetes API for the host. |
 | Facts, approval, effects | launcher, `host_api.go` | Only the host knows host truth and can act on it. |
 
-The agent advertises the `host-api-v1` capability, so an appliance without it is
-refused by an app that needs it.
+The agent advertises the optional `host-api-v1` capability. An appliance without it
+(for example the published 0.2.0) still runs and can still be updated by a newer app;
+the bridge is simply off, the CRDs are unused, and `requests` reports that the
+appliance predates the host API. Apps update more often than the appliance, so a new
+feature must never strand an installed one: only the *required* capabilities in
+`internal/protocol` decide whether an appliance can run.
 
 ## Resources
 

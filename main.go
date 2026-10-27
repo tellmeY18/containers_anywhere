@@ -308,10 +308,15 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 		return err
 	}
 	defer gateway.Close()
-	bridge := newHostBridge(state, m, gateway, client)
-	bridgeCtx, stopBridge := context.WithCancel(context.Background())
-	defer stopBridge()
-	go bridge.run(bridgeCtx)
+	// The host API needs an appliance that advertises it. An older one still runs
+	// and can still be updated; it just has no bridge.
+	var bridge *hostBridge
+	if hostAPISupported(m) {
+		bridge = newHostBridge(state, m, gateway, client)
+		bridgeCtx, stopBridge := context.WithCancel(context.Background())
+		defer stopBridge()
+		go bridge.run(bridgeCtx)
+	}
 	target, _ := url.Parse("http://guest")
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.Transport = transport
@@ -344,6 +349,10 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 				return
 			}
 			io.WriteString(w, "Candidate committed; local recovery point retained.\n")
+			return
+		}
+		if strings.HasPrefix(name, "host") && bridge == nil {
+			http.Error(w, "This appliance predates the host API; update the appliance to use it.", http.StatusNotFound)
 			return
 		}
 		if name == "host" && r.Method == "GET" {

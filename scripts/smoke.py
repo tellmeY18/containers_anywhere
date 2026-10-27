@@ -178,7 +178,7 @@ def main():
             def ready():
                 status = json.loads(request(c["URL"]+"/control/status", c["Token"]))
                 assert status["protocol"] == 1
-                assert {"status", "logs", "stop", "console-proxy", "platform-apply-v1", "workload-publication-v1", "host-api-v1"}.issubset(status["capabilities"])
+                assert {"status", "logs", "stop", "console-proxy", "platform-apply-v1", "workload-publication-v1"}.issubset(status["capabilities"])
                 return status.get("healthy") and status.get("console")
             wait_for(ready, process, timeout)
             if args.boot_only:
@@ -193,10 +193,11 @@ def main():
                 conditions = {x["type"]: x["status"] for x in status.get("conditions", [])}
                 return (agent.get("written") and conditions.get("HostReported") == "True"
                         and status.get("guest", {}).get("disk", {}).get("sizeBytes", 0) > 0 and host)
-            host = wait_for(host_api_alive, process, timeout)
-            assert host["facts"]["applianceVersion"], "Host facts are missing the appliance version"
-            assert host["pending"] == [] or not fresh, "A fresh install has nothing to approve"
-            print("PASS: host API bridge publishes HostStatus from host and guest facts", flush=True)
+            if "host-api-v1" in json.loads(request(c["URL"]+"/control/status", c["Token"]))["capabilities"]:
+                host = wait_for(host_api_alive, process, timeout)
+                assert host["facts"]["applianceVersion"], "Host facts are missing the appliance version"
+                assert host["pending"] == [] or not fresh, "A fresh install has nothing to approve"
+                print("PASS: host API bridge publishes HostStatus from host and guest facts", flush=True)
             try:
                 request(c["AppURL"]+"/api/v1/bootstrap")
                 raise AssertionError("Kite bootstrap exposed without host capability")
