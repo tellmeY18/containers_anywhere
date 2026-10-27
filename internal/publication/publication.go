@@ -111,6 +111,11 @@ func AllowedHost(host, namespace, name string) bool {
 	if namespace == "containers-demo" {
 		return (name == "demo" && host == "demo.local") || (name == "demo-localhost" && host == "demo.localhost")
 	}
+	// A namespace may also publish its own bare name (care.local for namespace care).
+	// "demo" is excluded because demo.local belongs to the built-in demo.
+	if namespace != "demo" && (host == namespace+".local" || host == namespace+".localhost") {
+		return true
+	}
 	return strings.HasSuffix(host, "."+namespace+".local") || strings.HasSuffix(host, "."+namespace+".localhost")
 }
 

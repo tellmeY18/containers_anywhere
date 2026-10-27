@@ -80,7 +80,7 @@ spec:
 | Field | Contract |
 | --- | --- |
 | `ingressRef` | Required name of a same-namespace `containers-anywhere` Ingress. No namespace field or cross-namespace references. |
-| `hostname` | Required exact rule hostname under `<namespace>.local` or `<namespace>.localhost`. No wildcards/IPs/catch-all routes. |
+| `hostname` | Required exact rule hostname under `<namespace>.local` or `<namespace>.localhost`, or the namespace's own bare name (`care.local` for namespace `care`; not `demo`, which is the built-in demo). No wildcards/IPs/catch-all routes. |
 | `enabled` | Defaults true. False withdraws routing and advertisements. |
 | `lan` | Defaults true. False restricts workload requests to loopback clients, using Caddy's authenticated forwarding metadata. |
 | `mdns` | Defaults false. True requires LAN and `.local`; advertisements require successful probes. |

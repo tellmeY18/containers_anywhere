@@ -285,3 +285,27 @@ func TestConditionsSeparateCertificateAvailabilityAndTrust(t *testing.T) {
 		t.Fatal("unchanged conditions churn transition timestamps")
 	}
 }
+
+func TestNamespaceMayPublishItsOwnBareName(t *testing.T) {
+	for _, tc := range []struct {
+		host, ns, name string
+		ok             bool
+	}{
+		{"care.local", "care", "care", true},
+		{"care.localhost", "care", "care-localhost", true},
+		{"app.care.local", "care", "app", true},
+		{"care.local", "other", "care", false},
+		{"other.local", "care", "x", false},
+		{"local", "local", "x", false},
+		{"demo.local", "demo", "demo", false},
+		{"demo.localhost", "demo", "demo", false},
+		{"demo.local", "containers-demo", "demo", true},
+		{"kite-system.local", "kite-system", "x", false},
+		{"kube-x.local", "kube-x", "x", false},
+		{"containers-gateway.local", "containers-gateway", "x", false},
+	} {
+		if got := AllowedHost(tc.host, tc.ns, tc.name); got != tc.ok {
+			t.Errorf("%s in %s: got %t", tc.host, tc.ns, got)
+		}
+	}
+}

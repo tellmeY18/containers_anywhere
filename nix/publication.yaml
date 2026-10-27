@@ -50,7 +50,7 @@ spec:
                   maxLength: 63
                   pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
                 hostname:
-                  description: A hostname under <namespace>.local or <namespace>.localhost.
+                  description: A hostname under <namespace>.local or <namespace>.localhost, or the bare <namespace>.local / <namespace>.localhost.
                   type: string
                   maxLength: 253
                   pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$'
@@ -121,7 +121,7 @@ spec:
   validations:
     - expression: "!object.metadata.namespace.startsWith('kube-') && !(object.metadata.namespace in ['kite-system', 'containers-gateway'])"
       message: Management namespaces cannot publish workloads.
-    - expression: "object.metadata.namespace == 'containers-demo' ? ((object.metadata.name == 'demo' && object.spec.hostname == 'demo.local') || (object.metadata.name == 'demo-localhost' && object.spec.hostname == 'demo.localhost')) : (object.spec.hostname.endsWith('.' + object.metadata.namespace + '.local') || object.spec.hostname.endsWith('.' + object.metadata.namespace + '.localhost'))"
+    - expression: "object.metadata.namespace == 'containers-demo' ? ((object.metadata.name == 'demo' && object.spec.hostname == 'demo.local') || (object.metadata.name == 'demo-localhost' && object.spec.hostname == 'demo.localhost')) : (object.spec.hostname.endsWith('.' + object.metadata.namespace + '.local') || object.spec.hostname.endsWith('.' + object.metadata.namespace + '.localhost') || (object.metadata.namespace != 'demo' && object.spec.hostname in [object.metadata.namespace + '.local', object.metadata.namespace + '.localhost']))"
       message: Names must belong to this namespace; demo hostnames are reserved.
 ---
 apiVersion: admissionregistration.k8s.io/v1
