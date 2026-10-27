@@ -2,8 +2,12 @@ name: Build and accept appliance
 on:
   workflow_dispatch:
     inputs:
+      e2e:
+        description: Run the full end-to-end lifecycle on a KVM VM (about 12 extra minutes). Skipped by default; run it before anything production-bound.
+        type: boolean
+        default: false
       extended:
-        description: Also run the wider acceptance checks (full publication suite, host API, registry trust)
+        description: Also run the wider acceptance checks (implies e2e; full publication suite, host API, registry trust)
         type: boolean
         default: false
   pull_request:
@@ -46,6 +50,7 @@ jobs:
     uses: ./.github/workflows/build-architecture.yml
     with:
       arch: amd64
+      e2e: ${{ github.event_name == 'workflow_dispatch' && (inputs.e2e || inputs.extended) }}
       extended: ${{ github.event_name == 'workflow_dispatch' && inputs.extended }}
       system: x86_64-linux
       runner: ubuntu-24.04
@@ -57,6 +62,7 @@ jobs:
     uses: ./.github/workflows/build-architecture.yml
     with:
       arch: arm64
+      e2e: ${{ github.event_name == 'workflow_dispatch' && (inputs.e2e || inputs.extended) }}
       extended: ${{ github.event_name == 'workflow_dispatch' && inputs.extended }}
       system: aarch64-linux
       runner: ubuntu-24.04-arm

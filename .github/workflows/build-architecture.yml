@@ -21,6 +21,10 @@ on:
       appliance_version:
         type: string
         default: ''
+      e2e:
+        description: Run the full end-to-end lifecycle (install, replacement, restore, root swap and fallback). Off by default; run it before anything production-bound.
+        type: boolean
+        default: false
       extended:
         description: Also run the wider acceptance checks (full publication suite, host API and registry trust).
         type: boolean
@@ -86,12 +90,12 @@ jobs:
           nix path-info --recursive --json "$system" > "dist/closure-$ARCH.json"
           python3 scripts/appliance_report.py "$BUNDLE" "dist/appliance-$ARCH.tar.gz" "dist/closure-$ARCH.json" >> "$GITHUB_STEP_SUMMARY"
       - name: Build distinct current-contract update drill appliance
-        if: inputs.arch == 'amd64'
+        if: inputs.arch == 'amd64' && inputs.e2e
         run: |
           candidate=$(nix build .#packages.x86_64-linux.bundle-update-drill --no-update-lock-file --out-link result-update-drill --print-out-paths)
           python3 scripts/appliance.py "$candidate" dist/update-candidate-amd64.tar.gz
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        if: inputs.arch == 'amd64'
+        if: inputs.arch == 'amd64' && inputs.e2e
         with:
           name: update-candidate-amd64
           path: dist/update-candidate-amd64.tar.gz
@@ -197,16 +201,13 @@ jobs:
       # VM was already booted by the appliance pass; a real boot of public pinned
       # bytes happens in app.yml (reuse_appliance without candidate_artifacts).
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        if: matrix.platform == 'linux' && matrix.arch == 'amd64' && !inputs.reuse_appliance
+        if: matrix.platform == 'linux' && matrix.arch == 'amd64' && !inputs.reuse_appliance && inputs.e2e
         with:
           name: update-candidate-amd64
           path: dist
-      - name: Linux KVM lifecycle acceptance (install, app replacement, backup/restore, root swap and fallback)
+      - name: Stage the appliance for boot tests
         if: matrix.platform == 'linux' && matrix.arch == 'amd64' && !(inputs.reuse_appliance && inputs.candidate_artifacts)
         shell: bash
-        env:
-          PUBLIC_DEPENDENCIES: ${{ inputs.reuse_appliance && !inputs.candidate_artifacts }}
-          EXTENDED: ${{ inputs.extended }}
         run: |
           test -c /dev/kvm
           sudo chmod a+rw /dev/kvm
@@ -215,6 +216,15 @@ jobs:
           if [ -f dist/releases/runtime-linux-amd64.tar.gz ]; then
             tar -xzf dist/releases/runtime-linux-amd64.tar.gz -C dist/acceptance/qemu
           fi
+      # The full lifecycle is expensive, so it runs on demand (e2e) and always when
+      # booting the published bytes of a release (app.yml), which is the prod gate.
+      - name: Linux KVM lifecycle acceptance (install, app replacement, backup/restore, root swap and fallback)
+        if: matrix.platform == 'linux' && matrix.arch == 'amd64' && !(inputs.reuse_appliance && inputs.candidate_artifacts) && (inputs.e2e || (inputs.reuse_appliance && !inputs.candidate_artifacts))
+        shell: bash
+        env:
+          PUBLIC_DEPENDENCIES: ${{ inputs.reuse_appliance && !inputs.candidate_artifacts }}
+          EXTENDED: ${{ inputs.extended }}
+        run: |
           runtime=dist/releases/runtime-linux-amd64.tar.gz
           if [ ! -f "$runtime" ]; then runtime=dist/runtime-linux-amd64.tar.gz; fi
           runtime_sha=$(sha256sum "$runtime" | cut -d ' ' -f1)
@@ -230,9 +240,11 @@ jobs:
             extra+=(--swap-bundle dist/update-candidate/bundle)
           fi
           python scripts/smoke.py --binary "$appdir/containers-anywhere" --replacement-binary "$appdir/replacement" --runtime-archive "$runtime" --bundle dist/acceptance/bundle --state dist/smoke --restore --gateway "${extra[@]}"
-      # Windows WHPX has no hosted runner, so replay its machine/CPU pair under
-      # KVM. This checks the configuration WHPX depends on, not WHPX itself.
-      - name: Linux KVM boot with the WHPX machine and CPU model
+      # Every run boots the appliance once and waits for K3s and the console to be
+      # healthy: the cheap gate that catches a broken image. It also replays the
+      # machine/CPU pair WHPX depends on under KVM; it checks that configuration, not
+      # WHPX itself.
+      - name: Linux KVM boot until healthy (WHPX machine and CPU model)
         if: matrix.platform == 'linux' && matrix.arch == 'amd64' && !(inputs.reuse_appliance && inputs.candidate_artifacts)
         shell: bash
         env:

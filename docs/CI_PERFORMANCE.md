@@ -167,3 +167,22 @@ checks stay in the scripts behind `smoke.py --extended` and are enabled for 1.0.
 The update drill previously ran as a separate invocation with its own fresh install
 and a second full publication suite. Source checks and promotion remain separate
 workflows: a release promotion does not itself verify the Source checks result.
+
+## End-to-end testing is on demand until production
+
+Measured on the full green run 40529626500, the Linux AMD64 package job took 1239 s while
+the macOS, Windows and Linux ARM64 jobs took roughly 60-260 s. The full KVM lifecycle was
+659 s of it, plus 93 s to download the 945 MB update-drill appliance and about 120 s to
+build and upload it in the appliance job.
+
+Default runs now skip all of that. They still build both appliances, package all four
+hosts, replay the app-only path, and boot the appliance once until K3s and the console
+are healthy (which is what caught the data-format ordering bug). The full lifecycle
+(install, Kite login, PVC workload, a workload-account publication, the demo, app
+replacement, encrypted restore, root swap and fallback) runs with
+`gh workflow run appliance.yml --ref develop -f e2e=true`, and the wider checks with
+`-f extended=true` (which implies e2e). `app.yml`, which boots the published bytes of a
+release, always runs the lifecycle: that is the production gate.
+
+A beta release may be promoted from a run without e2e, but its notes must say so. Before
+declaring anything production-ready, run e2e and extended on the exact release commit.

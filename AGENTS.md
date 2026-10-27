@@ -51,6 +51,11 @@ in ROADMAP.md. Planned recovery features must not be described as implemented.
   An upgrade path needs K3s migration and recovery acceptance before activation.
 - Check CARE Clinic's filesystem/OS helpers before reinventing them. Preserve
   attribution in THIRD_PARTY_NOTICES.md for reused atomicfile/diskspace code.
+- Until the production gate, default CI skips the full end-to-end lifecycle (it was
+  over half of the slowest job). Every run still builds, packages and boots the
+  appliance once until healthy. Run `appliance.yml -f e2e=true` (add `-f extended=true`
+  for the wider checks) before anything production-bound, and state in the release notes
+  whether it ran. `app.yml` always boots the published bytes of a release.
 - Release builds, compilation tests and packaging run in GitHub Actions.
   Format with gofmt; run go vet and go test -race in CI. Changes to lifecycle or
   storage also require the real smoke test with reboot and backup/restore.
