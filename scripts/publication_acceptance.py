@@ -49,6 +49,11 @@ def publication_acceptance(app_url, browser, request, wait, process, root, marke
                    "metadata": {"name": "mvp-web", "namespace": "default"},
                    "spec": {"ingressRef": "mvp-web", "hostname": "app.default.localhost",
                             "enabled": True, "lan": False, "mdns": False, "tls": {"mode": "LocalCA"}}}
+    apex = copy.deepcopy(publication)
+    apex["metadata"]["name"] = "mvp-apex"
+    apex["spec"]["hostname"] = "default.localhost"
+    foreign_apex = copy.deepcopy(apex)
+    foreign_apex["spec"]["hostname"] = "other.localhost"
     conflict = copy.deepcopy(publication)
     conflict["metadata"]["name"] = "mvp-conflict"
     derived = copy.deepcopy(ingress)
@@ -60,6 +65,8 @@ def publication_acceptance(app_url, browser, request, wait, process, root, marke
         1: api_step("POST", SERVICES, service) + api_step("POST", INGRESSES, ingress) + api_step("POST", PUBS, publication),
         2: api_step("PATCH", PUBS + "/mvp-web", {"spec": {"tls": {"mode": "ACME"}}}, (422,))
            + api_step("PATCH", PUBS + "/mvp-web", {"spec": {"hostname": "demo.local"}}, (403, 422))
+           + api_step("POST", PUBS + "?dryRun=All", apex, (201,))
+           + api_step("POST", PUBS + "?dryRun=All", foreign_apex, (403, 422))
            + api_step("PATCH", PUBS + "/mvp-web", {"spec": {"ingressRef": "other/web"}}, (422,))
            + api_step("POST", INGRESSES, derived, (403, 422))
            + api_step("PATCH", PUBS + "/mvp-web/status", {"status": {"url": "forged"}}, (403,))
