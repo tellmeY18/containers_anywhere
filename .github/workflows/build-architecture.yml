@@ -127,7 +127,6 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.13'
-      - run: go vet ./... && go test -race ./...
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         if: ${{ !inputs.reuse_appliance }}
         with:
@@ -190,8 +189,16 @@ jobs:
             mkdir -p dist/acceptance/qemu
             tar -xzf "dist/runtime-$PLATFORM-$ARCH.tar.gz" -C dist/acceptance/qemu
           fi
-      - name: Linux KVM boot, Kite workload, restart and encrypted restore
-        if: matrix.platform == 'linux' && matrix.arch == 'amd64'
+      # The candidate-app replay checks pinning, selection and packaging only. The
+      # VM was already booted by the appliance pass; a real boot of public pinned
+      # bytes happens in app.yml (reuse_appliance without candidate_artifacts).
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: matrix.platform == 'linux' && matrix.arch == 'amd64' && !inputs.reuse_appliance
+        with:
+          name: update-candidate-amd64
+          path: dist
+      - name: Linux KVM lifecycle acceptance (install, app replacement, backup/restore, appliance update)
+        if: matrix.platform == 'linux' && matrix.arch == 'amd64' && !(inputs.reuse_appliance && inputs.candidate_artifacts)
         shell: bash
         env:
           PUBLIC_DEPENDENCIES: ${{ inputs.reuse_appliance && !inputs.candidate_artifacts }}
@@ -211,29 +218,21 @@ jobs:
           go build -trimpath -ldflags="-X main.appVersion=replacement-test -X main.applianceURL=https://invalid.example/not-the-installed-appliance -X main.applianceSHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -X main.runtimeURL=https://invalid.example/qemu -X main.runtimeSHA256=$runtime_sha -X main.caddySHA256=$caddy_sha" -o "$appdir/replacement" .
           extra=()
           if [ "$PUBLIC_DEPENDENCIES" = true ]; then extra+=(--download); fi
+          if [ -f dist/update-candidate-amd64.tar.gz ]; then
+            mkdir -p dist/update-candidate/bundle
+            tar -xzf dist/update-candidate-amd64.tar.gz -C dist/update-candidate/bundle
+            extra+=(--update-bundle dist/update-candidate/bundle)
+          fi
           python scripts/smoke.py --binary "$appdir/containers-anywhere" --replacement-binary "$appdir/replacement" --runtime-archive "$runtime" --bundle dist/acceptance/bundle --state dist/smoke --restore --gateway "${extra[@]}"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        if: matrix.platform == 'linux' && matrix.arch == 'amd64' && !inputs.reuse_appliance
-        with:
-          name: update-candidate-amd64
-          path: dist
-      - name: KVM explicit update, validation, restart and recovery export
-        if: matrix.platform == 'linux' && matrix.arch == 'amd64' && !inputs.reuse_appliance
-        run: |
-          mkdir -p dist/update-candidate/bundle
-          tar -xzf dist/update-candidate-amd64.tar.gz -C dist/update-candidate/bundle
-          python scripts/smoke.py --binary dist/releases/stage-linux-amd64/containers-anywhere/containers-anywhere \
-            --bundle dist/acceptance/bundle --state dist/smoke-update --gateway --update-bundle dist/update-candidate/bundle \
-            --runtime-archive dist/releases/runtime-linux-amd64.tar.gz
       # Windows WHPX has no hosted runner, so replay its machine/CPU pair under
       # KVM. This checks the configuration WHPX depends on, not WHPX itself.
       - name: Linux KVM boot with the WHPX machine and CPU model
-        if: matrix.platform == 'linux' && matrix.arch == 'amd64'
+        if: matrix.platform == 'linux' && matrix.arch == 'amd64' && !(inputs.reuse_appliance && inputs.candidate_artifacts)
         shell: bash
         env:
           CONTAINERS_QEMU_MACHINE: pc
         run: |
-          python scripts/smoke.py --binary dist/releases/stage-linux-amd64/containers-anywhere/containers-anywhere --bundle dist/acceptance/bundle --state dist/smoke-whpx
+          python scripts/smoke.py --binary dist/releases/stage-linux-amd64/containers-anywhere/containers-anywhere --bundle dist/acceptance/bundle --state dist/smoke-whpx --boot-only
       # No hosted runner has WHPX, so this replays the Windows VM under TCG.
       # The gateway path is deliberately not repeated here: Traefik, the demo
       # pod and TLS issuance all cost emulated CPU, and the network path itself

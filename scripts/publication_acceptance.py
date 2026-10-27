@@ -16,7 +16,12 @@ INGRESSES = "/apis/networking.k8s.io/v1/namespaces/default/ingresses"
 SERVICES = "/api/v1/namespaces/default/services"
 
 
-def publication_acceptance(app_url, browser, request, wait, process, root, marker, timeout):
+def publication_acceptance(app_url, browser, request, wait, process, root, marker, timeout, quick=False):
+    """quick: a workload service account creates a publication that serves traffic.
+
+    The full suite (RBAC/admission denials, conflicts, rename, TLS modes, disable,
+    delete and recreation) runs only with extended acceptance.
+    """
     def apply(resource):
         request(app_url + "/api/v1/resources/apply",
                 data={"yaml": json.dumps(resource), "namespace": "default"}, opener=browser)
@@ -70,6 +75,8 @@ def publication_acceptance(app_url, browser, request, wait, process, root, marke
         9: api_step("PATCH", INGRESSES + "/mvp-web", {"spec": ingress["spec"]})
            + api_step("POST", PUBS, publication),
     }
+    if quick:
+        stages = {1: stages[1]}
     common = r'''
 set -eu
 API=https://kubernetes.default.svc
@@ -120,9 +127,10 @@ fail() { printf '%s\n' "$*" > /results/error; exit 1; }
                "data": {"stage": str(number)}})
 
     stage(0)
-    denied = api_step("POST", PUBS, publication, (403,)) + api_step("POST", INGRESSES, ingress, (403,))
-    deploy_probe("publication-denied", "publication-unprivileged",
-                 denied + 'echo PASS > /results/done\nwhile :; do sleep 3600; done\n')
+    if not quick:
+        denied = api_step("POST", PUBS, publication, (403,)) + api_step("POST", INGRESSES, ingress, (403,))
+        deploy_probe("publication-denied", "publication-unprivileged",
+                     denied + 'echo PASS > /results/done\nwhile :; do sleep 3600; done\n')
     script = "last=0\nwhile :; do\n"
     script += 'api "$API/api/v1/namespaces/default/configmaps/publication-acceptance-stage" > /tmp/stage || fail stage\n'
     for number, commands in stages.items():
@@ -148,7 +156,8 @@ fi
         assert not error, error.decode()
         return result(name, "done").strip() == expected
 
-    wait(lambda: done("publication-denied", b"PASS"), process, timeout)
+    if not quick:
+        wait(lambda: done("publication-denied", b"PASS"), process, timeout)
 
     def status(condition, expected="True", reason=None):
         data = result("publication-allowed", "wp.json")
@@ -200,7 +209,10 @@ fi
             wait(lambda: fetch("changed.default.local", tls=False).returncode != 0, process, timeout)
     # Stop the harness clients before the reboot/restore drill. Keep the final
     # workload publication, standard routes and service as persistent state.
-    for name in ["publication-allowed", "publication-denied"]:
+    for name in probes:
         probes[name]["spec"]["replicas"] = 0
         apply(probes[name])
-    print("PASS: workload SA publication create/status, admission/RBAC denials, conflicts, rename, TLS, disable/delete and recreation", flush=True)
+    if quick:
+        print("PASS: workload SA publication create/status and routed traffic", flush=True)
+    else:
+        print("PASS: workload SA publication create/status, admission/RBAC denials, conflicts, rename, TLS, disable/delete and recreation", flush=True)

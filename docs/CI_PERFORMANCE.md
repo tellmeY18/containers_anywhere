@@ -151,3 +151,19 @@ Linux ARM64 acceptance. Alpha 49 passed Go vet/race tests, Python tests, both Ni
 builds, all four packages, Linux KVM fresh boot/workload/reboot/encrypted
 backup/restore and Windows TCG boot acceptance. No reduced memory minimum, WHPX
 boot result or further image-size saving is claimed.
+
+## Pre-1.0 essential-only acceptance
+
+Until stability is declared, CI runs only what protects the current contract. Wider
+checks stay in the scripts behind `smoke.py --extended` and are enabled for 1.0.
+
+| Where | Runs now | Deferred (`--extended` or removed) |
+| --- | --- | --- |
+| Go/Python tests | Once, in Source checks (`alpha.yml`) | The per-package-cell rerun (macOS `-race` cost 133 s) |
+| KVM lifecycle | One invocation: fresh install, Kite login, PVC workload, one workload-SA publication, demo over LocalCA, app replacement, encrypted restore, then the appliance update (activate, write, commit, restart) and cold recovery boot | Full 9-stage publication suite and denial probes, demo redirect/certificate status, fresh-namespace inspection, the uncommitted-candidate retry boot |
+| WHPX machine replay | Boot until healthy (`--boot-only`) | Kite, PVC and gateway checks |
+| Candidate-app replay | Pinning, selection and packaging | VM boots (the appliance pass already booted this appliance; `app.yml` boots the real public bytes) |
+
+The update drill previously ran as a separate invocation with its own fresh install
+and a second full publication suite. Source checks and promotion remain separate
+workflows: a release promotion does not itself verify the Source checks result.

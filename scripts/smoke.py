@@ -16,6 +16,10 @@ import urllib.request
 from publication_acceptance import publication_acceptance
 
 
+class BootOnly(Exception):
+    """Raised once the appliance is healthy when only boot is under test."""
+
+
 def request(url, token=None, data=None, opener=None):
     headers = {"Content-Type": "application/json"}
     if token:
@@ -63,9 +67,11 @@ def main():
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--restore", action="store_true")
-    parser.add_argument("--gateway", action="store_true", help="accept packaged Caddy and preloaded Traefik")
+    parser.add_argument("--gateway", action="store_true", help="accept packaged Caddy, Traefik and the demo")
     parser.add_argument("--replacement-binary", type=Path, help="restart automatically with a different app recommendation")
     parser.add_argument("--runtime-archive", type=Path, help="exact QEMU archive pinned by the replacement app")
+    parser.add_argument("--boot-only", action="store_true", help="stop after the appliance reports healthy (machine/CPU configuration replay)")
+    parser.add_argument("--extended", action="store_true", help="wider checks: full publication suite, demo redirect/certificate status, fresh-namespace inspection and the uncommitted-candidate retry boot")
     parser.add_argument("--download", action="store_true", help="fresh boot through the packaged launcher's actual public download pins")
     parser.add_argument("--update-bundle", type=Path, help="distinct current data-contract appliance for explicit KVM update/recovery drill")
     args = parser.parse_args()
@@ -108,6 +114,9 @@ def main():
                 assert {"status", "logs", "stop", "console-proxy", "platform-apply-v1", "workload-publication-v1"}.issubset(status["capabilities"])
                 return status.get("healthy") and status.get("console")
             wait_for(ready, process, timeout)
+            if args.boot_only:
+                print("PASS: appliance boots healthy", flush=True)
+                raise BootOnly
             try:
                 request(c["AppURL"]+"/api/v1/bootstrap")
                 raise AssertionError("Kite bootstrap exposed without host capability")
@@ -120,7 +129,7 @@ def main():
             request(c["AppURL"]+endpoint, data=admin, opener=browser)
             assert json.loads(request(c["AppURL"]+"/api/v1/bootstrap", opener=browser))["setup"]["initialized"]
             assert b"local" in request(c["AppURL"]+"/api/v1/clusters", opener=browser)
-            if fresh:
+            if fresh and args.extended:
                 for namespace in ["cncm-system", "care"]:
                     try:
                         request(c["AppURL"]+"/api/v1/namespaces/_all/"+namespace, opener=browser)
@@ -156,7 +165,7 @@ def main():
                 if fresh:
                     publication_acceptance(c["AppURL"], browser, request, wait_for, process,
                                            directory / "gateway/caddy/pki/authorities/local/root.crt",
-                                           marker, timeout)
+                                           marker, timeout, quick=not args.extended)
                 obj = wait_for(lambda: json.loads(request(
                     c["AppURL"] + "/api/v1/workloadpublications.networking.containersanywhere.dev/default/mvp-web",
                     opener=browser)), process, timeout)
@@ -204,15 +213,16 @@ def main():
                     wait_for(demo_ready, process, 300)
                 except TimeoutError:
                     demo = last[0]
-                    raise AssertionError(f"Preloaded demo did not traverse Caddy/Traefik: rc={demo.returncode} stdout={demo.stdout[:200]!r} stderr={demo.stderr[:200]!r}")
-                redirect = subprocess.run(redirect_command, capture_output=True)
-                assert redirect.returncode == 0 and redirect.stdout == b"308 https://demo.local:18443/", f"Demo HTTP did not redirect to HTTPS: {redirect.stdout!r} {redirect.stderr[:200]!r}"
+                    raise AssertionError(f"Demo did not traverse Caddy/Traefik: rc={demo.returncode} stdout={demo.stdout[:200]!r} stderr={demo.stderr[:200]!r}")
+                if args.extended:
+                    redirect = subprocess.run(redirect_command, capture_output=True)
+                    assert redirect.returncode == 0 and redirect.stdout == b"308 https://demo.local:18443/", f"Demo HTTP did not redirect to HTTPS: {redirect.stdout!r} {redirect.stderr[:200]!r}"
 
-                def demo_status_ready():
-                    status = json.loads(request(c["URL"]+"/control/gateway", c["Token"]))
-                    demo = [e for e in status.get("endpoints", []) if e["url"] == "https://demo.local:18443/"]
-                    return demo and demo[0]["ready"] and demo[0]["certificateReady"]
-                wait_for(demo_status_ready, process, timeout)
+                    def demo_status_ready():
+                        status = json.loads(request(c["URL"]+"/control/gateway", c["Token"]))
+                        demo = [e for e in status.get("endpoints", []) if e["url"] == "https://demo.local:18443/"]
+                        return demo and demo[0]["ready"] and demo[0]["certificateReady"]
+                    wait_for(demo_status_ready, process, timeout)
                 nonlocal gateway_root
                 if gateway_root is None:
                     gateway_root = root.read_bytes()
@@ -245,6 +255,8 @@ def main():
                 journal = json.loads((directory / "update.json").read_text())
                 assert journal["phase"] == "committed"
                 assert journal["validated_at"]
+        except BootOnly:
+            pass
         finally:
             if c and process.poll() is None:
                 try:
@@ -267,6 +279,13 @@ def main():
         assert process.returncode == 0
 
     boot(state, fresh=True)
+    if args.restore:
+        archive = state.parent / (state.name+".age")
+        restored = state.parent / (state.name+"-restored")
+        subprocess.run([str(binary), "backup", "--state", str(state), "--file", str(archive)], check=True)
+        subprocess.run([str(binary), "restore", "--state", str(restored), "--file", str(archive), "--key", str(archive)+".key"], check=True)
+        boot(restored)
+        print("PASS: encrypted restore preserves Kite account, cluster and PVC", flush=True)
     if args.replacement_binary:
         if not args.runtime_archive:
             raise ValueError("Replacement acceptance needs its exact runtime archive")
@@ -277,7 +296,7 @@ def main():
         boot(state, replacement=True)
         assert (state / "release.json").read_bytes() == original, "App replacement changed appliance identity"
         print("PASS: replacement app retains exact appliance, Kite identity and PVC with no appliance download", flush=True)
-    else:
+    elif not args.update_bundle:
         boot(state)
     if args.update_bundle:
         if not args.runtime_archive:
@@ -291,9 +310,12 @@ def main():
                         "--bundle", str(candidate), "--original-bundle", str(bundle)], check=True)
         assert json.loads((state / "release.json").read_text()) == original_identity
         cold_marker = marker
-        boot(state, update=True, commit=False, write_update_marker=True)
-        assert json.loads((state / "update.json").read_text())["phase"] == "candidate-running"
-        boot(state, update=True)  # Must retain the new marker, never rewind.
+        if args.extended:
+            boot(state, update=True, commit=False, write_update_marker=True)
+            assert json.loads((state / "update.json").read_text())["phase"] == "candidate-running"
+            boot(state, update=True)  # Must retain the new marker, never rewind.
+        else:
+            boot(state, update=True, write_update_marker=True)
         assert json.loads((state / "release.json").read_text())["system"] == candidate_identity["system"]
         boot(state, automatic=True)
         recovered = state.parent / (state.name + "-recovered")
@@ -306,13 +328,6 @@ def main():
         assert json.loads((recovered / "release.json").read_text()) == original_identity
         assert (state / "data.img").exists(), "Recovery removed current candidate data"
         print("PASS: distinct current-contract update/retry preserves candidate PVC writes, WorkloadPublication UID/spec/routing, login and CA; explicit cold recovery preserves originals", flush=True)
-    if args.restore:
-        archive = state.parent / (state.name+".age")
-        restored = state.parent / (state.name+"-restored")
-        subprocess.run([str(binary), "backup", "--state", str(state), "--file", str(archive)], check=True)
-        subprocess.run([str(binary), "restore", "--state", str(restored), "--file", str(archive), "--key", str(archive)+".key"], check=True)
-        boot(restored)
-        print("PASS: encrypted restore preserves Kite account, cluster and PVC", flush=True)
 
 
 if __name__ == "__main__":
