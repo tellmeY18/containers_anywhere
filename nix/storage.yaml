@@ -1,0 +1,120 @@
+# Storage for workloads on the btrfs data disk. The guest agent provisions one
+# subvolume per PersistentVolumeClaim and takes snapshots on request. Workloads
+# only create ordinary Kubernetes objects; nothing here is specific to an application.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: containers-anywhere-btrfs
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: containers-anywhere.dev/btrfs
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: false
+---
+# For databases and other random-write data. Copy-on-write is off for new files, so
+# btrfs checksums do not cover them and a snapshot still copies a block on its first
+# write afterwards. Choose it deliberately.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: containers-anywhere-btrfs-nocow
+provisioner: containers-anywhere.dev/btrfs
+parameters:
+  cow: "false"
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: false
+---
+# K3s's bundled local-path provisioner is disabled; this name keeps manifests that
+# ask for it working.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-path
+provisioner: containers-anywhere.dev/btrfs
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: false
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: pvcsnapshots.storage.containersanywhere.dev
+spec:
+  group: storage.containersanywhere.dev
+  scope: Namespaced
+  names:
+    kind: PVCSnapshot
+    plural: pvcsnapshots
+    singular: pvcsnapshot
+    shortNames: [pvcsnap]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - {name: Claim, type: string, jsonPath: .spec.persistentVolumeClaimName}
+        - {name: Phase, type: string, jsonPath: .status.phase}
+        - {name: Created, type: string, jsonPath: .status.createdAt}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [persistentVolumeClaimName]
+              properties:
+                persistentVolumeClaimName:
+                  type: string
+                  description: A PersistentVolumeClaim in this namespace, provisioned by a Containers Anywhere btrfs class.
+                  minLength: 1
+                  maxLength: 253
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: pvcsnapshotschedules.storage.containersanywhere.dev
+spec:
+  group: storage.containersanywhere.dev
+  scope: Namespaced
+  names:
+    kind: PVCSnapshotSchedule
+    plural: pvcsnapshotschedules
+    singular: pvcsnapshotschedule
+    shortNames: [pvcsnapsched]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - {name: Claim, type: string, jsonPath: .spec.persistentVolumeClaimName}
+        - {name: EveryMinutes, type: integer, jsonPath: .spec.intervalMinutes}
+        - {name: Keep, type: integer, jsonPath: .spec.keep}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [persistentVolumeClaimName, intervalMinutes, keep]
+              properties:
+                persistentVolumeClaimName:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                intervalMinutes:
+                  type: integer
+                  minimum: 5
+                  maximum: 10080
+                keep:
+                  type: integer
+                  minimum: 1
+                  maximum: 10

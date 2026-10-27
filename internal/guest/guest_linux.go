@@ -20,7 +20,7 @@ import (
 
 func Main() error {
 	if len(os.Args) == 3 && os.Args[2] == "init-data" {
-		return initDataFormat("/var/lib")
+		return initData("/var/lib")
 	}
 	var listener net.Listener
 	var err error
@@ -42,6 +42,7 @@ func Main() error {
 	gateway := &guestGateway{}
 	go gateway.refresh(context.Background())
 	gateway.routes(mux)
+	startStorage(context.Background())
 	host := newGuestHostAPI()
 	go host.run(context.Background())
 	host.routes(mux)

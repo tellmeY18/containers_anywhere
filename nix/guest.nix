@@ -12,6 +12,7 @@ let
         ../internal/protocol
         ../internal/publication
         ../internal/hostapi
+        ../internal/storage
         ../internal/atomicfile
         ../go.mod
         ../go.sum
@@ -80,14 +81,26 @@ in
     # -Ededupe forces single-threaded compression in the pinned microvm builder.
     # Retain LZ4HC density and tail packing while allowing parallel construction.
     storeDiskErofsFlags = [ "-zlz4hc" "-Eztailpacking" "-Efragments" ];
-    volumes = [{ image = "data.img"; mountPoint = "/var/lib"; size = 16384; }];
+    volumes = [{ image = "data.img"; mountPoint = "/var/lib"; size = 8192; fsType = "btrfs"; autoCreate = false; }];
   };
+  # One btrfs holds everything. @system is /var/lib; the nested subvolumes for
+  # container images, logs and volumes are created by the agent. @snapshots sits
+  # beside it and is mounted away from /var/lib so no pod path can reach it.
   fileSystems."/var/lib" = {
     device = lib.mkForce "/dev/disk/by-id/virtio-ca-data";
+    fsType = lib.mkForce "btrfs";
+    options = [ "subvol=@system" "noatime" "discard=async" ];
     autoResize = true;
     neededForBoot = true;
   };
-  boot.initrd.supportedFilesystems = [ "erofs" "ext4" ];
+  fileSystems."/run/ca/snapshots" = {
+    device = "/dev/disk/by-id/virtio-ca-data";
+    fsType = "btrfs";
+    options = [ "subvol=@snapshots" "noatime" "discard=async" "x-mount.mkdir" ];
+  };
+  services.btrfs.autoScrub = { enable = true; fileSystems = [ "/var/lib" ]; interval = "monthly"; };
+  boot.initrd.supportedFilesystems = [ "erofs" "btrfs" ];
+  boot.supportedFilesystems = [ "btrfs" ];
   boot.kernelModules = [ "vmw_vsock_virtio_transport" "virtio_net" "qemu_fw_cfg" "virtio_balloon" "overlay" "br_netfilter" "nf_conntrack" ];
   boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
   networking.useDHCP = true;
@@ -108,13 +121,14 @@ in
     package = pkgs.k3s_1_35;
     role = "server";
     nodeName = "containers-anywhere";
-    disable = [ "traefik" "servicelb" "metrics-server" ];
+    disable = [ "traefik" "servicelb" "metrics-server" "local-storage" ];
     extraFlags = [ "--write-kubeconfig-mode=0600" "--secrets-encryption" ];
     gracefulNodeShutdown.enable = true;
     # Only K3s's own system images are preloaded. Kite, the gateway and the demo
     # are platform workloads applied by the host app and pulled at runtime.
     images = [ config.services.k3s.package.airgap-images ];
     manifests.publication.source = ./publication.yaml;
+    manifests.storage.source = ./storage.yaml;
   };
   # The root filesystem is disposable. Retain the node password across boots,
   # alongside the cluster database, containerd images and local-path volumes.
@@ -158,7 +172,7 @@ in
   systemd.services.containers-agent = {
     wantedBy = [ "multi-user.target" ];
     after = [ "local-fs.target" ];
-    path = [ pkgs.systemd config.services.k3s.package ];
+    path = [ pkgs.systemd config.services.k3s.package pkgs.btrfs-progs pkgs.e2fsprogs ];
     serviceConfig = { ExecStart = "${agent}/bin/guest guest"; Restart = "on-failure"; };
   };
   # Fail closed before anything writes to the data disk: the disk must be empty
@@ -171,6 +185,8 @@ in
     after = [ "local-fs.target" ];
     conflicts = [ "shutdown.target" ];
     unitConfig.DefaultDependencies = false;
+    path = [ pkgs.btrfs-progs pkgs.e2fsprogs ];
+    environment.CA_APPLIANCE_VERSION = lib.removeSuffix "\n" (builtins.readFile ../APPLIANCE_VERSION);
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;

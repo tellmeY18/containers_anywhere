@@ -153,7 +153,7 @@ func updateDataCompatible(old, next manifest) error {
 		old.DataContract != protocol.DataContract || next.DataContract != old.DataContract ||
 		!(identical || upgrade) ||
 		old.DataBytes != next.DataBytes {
-		return errors.New("unsupported data contract: this update requires var-lib-v1, the same K3s minor version (patch releases may only move forward), architecture and disk geometry; reset required for unsupported changes: use a new empty state directory, never delete existing data")
+		return errors.New("unsupported data contract: this update requires var-lib-btrfs-v1, the same K3s minor version (patch releases may only move forward), architecture and disk geometry; reset required for unsupported changes: use a new empty state directory, never delete existing data")
 	}
 	return nil
 }
