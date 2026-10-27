@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+
+	"github.com/tellmeY18/containers_anywhere/internal/diskspace"
 )
 
 const approvedResourcesFile = "resources.json"
@@ -15,6 +17,7 @@ const approvedResourcesFile = "resources.json"
 type approvedResources struct {
 	CPUs       int    `json:"cpus"`
 	MemoryMiB  int    `json:"memoryMiB"`
+	DiskGiB    int    `json:"diskGiB,omitempty"`
 	RequestUID string `json:"requestUID,omitempty"`
 	ApprovedAt string `json:"approvedAt,omitempty"`
 }
@@ -61,3 +64,35 @@ func vmResourcesFor(state string) (int, int, error) {
 }
 
 func vmResources() (int, int, error) { return vmResourcesFor("") }
+
+// growDataDisk extends the sparse data disk to the size an administrator approved.
+// It only ever grows the file; the guest enlarges the filesystem when it boots. If
+// the computer has less free space than the growth, it refuses rather than let the
+// disk fill the host.
+func growDataDisk(state string) error {
+	a, ok := readApprovedResources(state)
+	if !ok || a.DiskGiB == 0 {
+		return nil
+	}
+	path := filepath.Join(state, "data.img")
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	want := int64(a.DiskGiB) << 30
+	if want <= info.Size() {
+		return nil
+	}
+	if u, err := diskspace.Of(state); err == nil && u.Free < uint64(want-info.Size()) {
+		return fmt.Errorf("not growing the data disk to %d GiB: this computer has only %d GiB free", a.DiskGiB, u.Free>>30)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := f.Truncate(want); err != nil {
+		return err
+	}
+	return f.Sync()
+}

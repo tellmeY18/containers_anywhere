@@ -23,6 +23,8 @@ const (
 
 	MinMemoryMiB = 2048
 	MaxMemoryMiB = 256 << 10
+	MinDiskGiB   = 8
+	MaxDiskGiB   = 256
 	MinCPUs      = 2
 	MaxCPUs      = 64
 )
@@ -37,9 +39,12 @@ type Meta struct {
 	DeletionTimestamp *string `json:"deletionTimestamp,omitempty"`
 }
 
+// ResourcesSpec asks for a VM size. DiskGiB is optional: 0 leaves the data disk as
+// it is; a larger value grows it (it never shrinks) the next time the appliance starts.
 type ResourcesSpec struct {
 	CPUs      int `json:"cpus"`
 	MemoryMiB int `json:"memoryMiB"`
+	DiskGiB   int `json:"diskGiB,omitempty"`
 }
 
 type PowerSpec struct {
@@ -91,6 +96,9 @@ func (s RequestSpec) Validate() error {
 		}
 		if s.Resources.CPUs < MinCPUs || s.Resources.CPUs > MaxCPUs || s.Resources.MemoryMiB < MinMemoryMiB || s.Resources.MemoryMiB > MaxMemoryMiB {
 			return fmt.Errorf("cpus must be %d-%d and memoryMiB %d-%d", MinCPUs, MaxCPUs, MinMemoryMiB, MaxMemoryMiB)
+		}
+		if d := s.Resources.DiskGiB; d != 0 && (d < MinDiskGiB || d > MaxDiskGiB) {
+			return fmt.Errorf("diskGiB must be 0 (unchanged) or %d-%d", MinDiskGiB, MaxDiskGiB)
 		}
 	case TypePower:
 		if s.Power == nil || set != 1 {

@@ -377,10 +377,18 @@ func (b *hostBridge) apply(ctx context.Context, a hostapi.Actionable) (hostapi.D
 	switch a.Spec.Type {
 	case hostapi.TypeResources:
 		r := a.Spec.Resources
-		if err := saveJSON(filepath.Join(b.state, approvedResourcesFile), approvedResources{CPUs: r.CPUs, MemoryMiB: r.MemoryMiB, RequestUID: a.UID, ApprovedAt: time.Now().UTC().Format(time.RFC3339)}); err != nil {
+		disk := r.DiskGiB
+		if prev, found := readApprovedResources(b.state); found && prev.DiskGiB > disk {
+			disk = prev.DiskGiB // the disk never shrinks
+		}
+		if err := saveJSON(filepath.Join(b.state, approvedResourcesFile), approvedResources{CPUs: r.CPUs, MemoryMiB: r.MemoryMiB, DiskGiB: disk, RequestUID: a.UID, ApprovedAt: time.Now().UTC().Format(time.RFC3339)}); err != nil {
 			return failed(a.UID, "WriteFailed", err), nil
 		}
-		return ok("The new size takes effect the next time the appliance starts. The data disk is not changed.", map[string]int{"cpus": r.CPUs, "memoryMiB": r.MemoryMiB}), nil
+		msg := "The new size takes effect the next time the appliance starts."
+		if r.DiskGiB > 0 {
+			msg += " The data disk grows then, and never shrinks."
+		}
+		return ok(msg, map[string]int{"cpus": r.CPUs, "memoryMiB": r.MemoryMiB, "diskGiB": disk}), nil
 	case hostapi.TypePower:
 		action := a.Spec.Power.Action
 		return ok("The appliance will "+action+" now", map[string]string{"action": action}), func() { triggerPower(action) }

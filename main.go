@@ -271,6 +271,9 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 	if err = ensureData(state, bundle, m); err != nil {
 		return err
 	}
+	if err := growDataDisk(state); err != nil {
+		fmt.Fprintln(os.Stderr, err) // the cluster still starts at its current size
+	}
 	release, err := readManifest(filepath.Join(state, "release.json"))
 	if err != nil {
 		return err
