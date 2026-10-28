@@ -376,7 +376,7 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 			io.WriteString(w, "ok\n")
 			return
 		}
-		if name == "restore-points" || name == "restore-points/restore" {
+		if name == "restore-points" || name == "restore-points/restore" || name == "restore-points/take" {
 			if !protocol.Has(m.Capabilities, "system-restore-v1") {
 				http.Error(w, "This appliance predates system restore; update the appliance to use it.", http.StatusNotFound)
 				return
@@ -388,6 +388,15 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 					return
 				}
 				w.Header().Set("Content-Type", "application/json")
+				w.Write(out)
+				return
+			}
+			if name == "restore-points/take" && r.Method == "POST" {
+				out, err := guestRestoreCall(r.Context(), client, "POST", "/_agent/storage/restore-point", nil)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusConflict)
+					return
+				}
 				w.Write(out)
 				return
 			}

@@ -26,7 +26,7 @@ func copyTree(ctx context.Context, src, dst string) error {
 func restoreConfig(varLib string) storage.RestoreConfig {
 	return storage.RestoreConfig{
 		RestorePointConfig: storage.RestorePointConfig{VarLib: varLib, SnapshotsDir: snapshotsDir, PoolDir: poolDir,
-			Version: os.Getenv("CA_APPLIANCE_VERSION"), Keep: 2},
+			Version: os.Getenv("CA_APPLIANCE_VERSION"), K3s: k3sMinor(), Keep: 2},
 		Copy: copyTree,
 	}
 }
@@ -54,7 +54,7 @@ func applyPendingRestore(varLib string) error {
 func (g *guestHostAPI) restoreRoutes(mux *http.ServeMux) {
 	version := func() string { return os.Getenv("CA_APPLIANCE_VERSION") }
 	mux.HandleFunc("GET /_agent/storage/restore-points", func(w http.ResponseWriter, r *http.Request) {
-		points, err := storage.ListRestorePoints(snapshotsDir, version())
+		points, err := storage.ListRestorePoints(snapshotsDir, version(), k3sMinor())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
@@ -62,6 +62,14 @@ func (g *guestHostAPI) restoreRoutes(mux *http.ServeMux) {
 		last, _ := storage.LastRestore(snapshotsDir)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"points": points, "pending": storage.PendingRestore(snapshotsDir), "last": last, "applianceVersion": version()})
+	})
+	mux.HandleFunc("POST /_agent/storage/restore-point", func(w http.ResponseWriter, r *http.Request) {
+		point, err := storage.TakeManualRestorePoint(r.Context(), storage.NewBtrfsFS(), restoreConfig("/var/lib").RestorePointConfig)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprintf(w, "Restore point %s taken\n", point)
 	})
 	mux.HandleFunc("POST /_agent/storage/restore", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
@@ -71,7 +79,7 @@ func (g *guestHostAPI) restoreRoutes(mux *http.ServeMux) {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
-		if err := storage.RequestRestore(snapshotsDir, body.ID, version(), time.Now()); err != nil {
+		if err := storage.RequestRestore(snapshotsDir, body.ID, version(), k3sMinor(), time.Now()); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}

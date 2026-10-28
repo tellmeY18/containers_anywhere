@@ -40,6 +40,7 @@ type RestoreConfig struct {
 type RestorePoint struct {
 	ID        string   `json:"id"`
 	From      string   `json:"from"`
+	K3s       string   `json:"k3s,omitempty"`
 	To        string   `json:"to"`
 	Label     string   `json:"label,omitempty"`
 	CreatedAt string   `json:"createdAt"`
@@ -75,8 +76,42 @@ func readMeta(dir string) (restorePointMeta, error) {
 	return m, json.Unmarshal(b, &m)
 }
 
+// sameK3sMinor reports whether two "1.35.8+k3s1" strings name the same Kubernetes minor.
+func sameK3sMinor(a, b string) bool {
+	minor := func(v string) string {
+		core := strings.SplitN(v, "+", 2)[0]
+		parts := strings.Split(core, ".")
+		if len(parts) < 2 {
+			return ""
+		}
+		return parts[0] + "." + parts[1]
+	}
+	ma := minor(a)
+	return ma != "" && ma == minor(b)
+}
+
+// restorable says whether this appliance can put a point's state back. A point from the same
+// appliance always can. A point from a different appliance can only be used when the Kubernetes
+// minor is the same: K3s cannot read a datastore written by a newer minor, and a restore is a
+// deliberate step back, so the older appliance may follow.
+func restorable(m restorePointMeta, currentVersion, currentK3s string) (bool, string) {
+	if m.From == currentVersion {
+		return true, ""
+	}
+	switch {
+	case m.K3s == "":
+		return false, "this point does not record which Kubernetes version took it (" + m.From + "), so it cannot be checked for compatibility"
+	case currentK3s == "":
+		return false, "this appliance does not report its Kubernetes version, so the point cannot be checked"
+	case sameK3sMinor(m.K3s, currentK3s):
+		return true, ""
+	default:
+		return false, fmt.Sprintf("this point was taken with Kubernetes %s and this appliance runs %s; start the appliance that matches it first", m.K3s, currentK3s)
+	}
+}
+
 // ListRestorePoints returns the points on this disk, newest first.
-func ListRestorePoints(snapshotsDir, currentVersion string) ([]RestorePoint, error) {
+func ListRestorePoints(snapshotsDir, currentVersion, currentK3s string) ([]RestorePoint, error) {
 	entries, err := os.ReadDir(snapshotsDir)
 	if err != nil {
 		return nil, err
@@ -87,14 +122,11 @@ func ListRestorePoints(snapshotsDir, currentVersion string) ([]RestorePoint, err
 			continue
 		}
 		m, err := readMeta(filepath.Join(snapshotsDir, e.Name()))
-		p := RestorePoint{ID: e.Name(), From: m.From, To: m.To, Label: m.Label, CreatedAt: m.CreatedAt, Volumes: m.Volumes}
-		switch {
-		case err != nil:
+		p := RestorePoint{ID: e.Name(), From: m.From, To: m.To, Label: m.Label, CreatedAt: m.CreatedAt, Volumes: m.Volumes, K3s: m.K3s}
+		if err != nil {
 			p.Reason = "the restore point has no readable description"
-		case m.From != currentVersion:
-			p.Reason = fmt.Sprintf("this point was taken under appliance %s and %s is running; start the matching appliance first", m.From, currentVersion)
-		default:
-			p.Restorable = true
+		} else {
+			p.Restorable, p.Reason = restorable(m, currentVersion, currentK3s)
 		}
 		out = append(out, p)
 	}
@@ -104,11 +136,11 @@ func ListRestorePoints(snapshotsDir, currentVersion string) ([]RestorePoint, err
 
 // RequestRestore records that the next boot must restore the given point. It changes
 // nothing else: the restore happens before the cluster starts, in ApplyPendingRestore.
-func RequestRestore(snapshotsDir, id, currentVersion string, now time.Time) error {
+func RequestRestore(snapshotsDir, id, currentVersion, currentK3s string, now time.Time) error {
 	if !pointName.MatchString(id) {
 		return errors.New("not a restore point")
 	}
-	points, err := ListRestorePoints(snapshotsDir, currentVersion)
+	points, err := ListRestorePoints(snapshotsDir, currentVersion, currentK3s)
 	if err != nil {
 		return err
 	}
@@ -203,9 +235,9 @@ func ApplyPendingRestore(ctx context.Context, fs FS, cfg RestoreConfig) (bool, e
 		os.Remove(path)
 		return finish(errors.New("the restore point is missing or damaged; nothing was changed"))
 	}
-	if meta.From != cfg.Version {
+	if ok, why := restorable(meta, cfg.Version, cfg.K3s); !ok {
 		os.Remove(path)
-		return finish(fmt.Errorf("the restore point was taken under appliance %s and %s is running; nothing was changed", meta.From, cfg.Version))
+		return finish(errors.New(why + "; nothing was changed"))
 	}
 	if pend.Phase != "restoring" {
 		cfg.Protect = pend.ID
@@ -363,4 +395,20 @@ func removeAllSubvolumeAware(ctx context.Context, fs FS, p string) error {
 		}
 	}
 	return os.Remove(p)
+}
+
+// TakeManualRestorePoint snapshots the current state on request, so a person can keep a way back
+// before a risky change without waiting for an appliance update. Like the automatic ones it is a
+// crash-consistent copy of a running cluster, kept on the same disk.
+func TakeManualRestorePoint(ctx context.Context, fs FS, cfg RestorePointConfig) (string, error) {
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	if cfg.Keep < 1 {
+		cfg.Keep = 2
+	}
+	if _, err := os.Stat(cfg.SnapshotsDir); err != nil {
+		return "", fmt.Errorf("snapshots are not available: %w", err)
+	}
+	return takeLabelledRestorePoint(ctx, fs, cfg, cfg.Version, "manual")
 }

@@ -20,8 +20,11 @@ type bootRecord struct {
 }
 
 type restorePointMeta struct {
-	Label     string   `json:"label,omitempty"`
-	From      string   `json:"from"`
+	Label string `json:"label,omitempty"`
+	From  string `json:"from"`
+	// K3s is the Kubernetes minor the point's cluster ran. A restore is only safe under the same
+	// minor, because K3s never moves its datastore backwards between minors.
+	K3s       string   `json:"k3s,omitempty"`
 	To        string   `json:"to"`
 	CreatedAt string   `json:"createdAt"`
 	Volumes   []string `json:"volumes"`
@@ -33,6 +36,7 @@ type restorePointMeta struct {
 type RestorePointConfig struct {
 	VarLib, SnapshotsDir, PoolDir string
 	Version                       string
+	K3s                           string // the Kubernetes major.minor this appliance runs
 	Keep                          int
 	// Protect names a restore point that pruning must not remove (the one being restored from).
 	Protect string
@@ -90,7 +94,7 @@ func takeLabelledRestorePoint(ctx context.Context, fs FS, cfg RestorePointConfig
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		return "", err
 	}
-	meta := restorePointMeta{Label: label, From: from, To: cfg.Version, CreatedAt: cfg.Now().UTC().Format(time.RFC3339)}
+	meta := restorePointMeta{Label: label, From: from, K3s: cfg.K3s, To: cfg.Version, CreatedAt: cfg.Now().UTC().Format(time.RFC3339)}
 	if err := fs.Snapshot(ctx, cfg.VarLib, filepath.Join(dir, "system"), true); err != nil {
 		return dir, err
 	}

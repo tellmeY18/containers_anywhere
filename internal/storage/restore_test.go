@@ -64,11 +64,11 @@ func newRestoreFixture(t *testing.T) *restoreFixture {
 	f.fs.subs[filepath.Join(dir, "vol-vol-1")] = true
 	write(t, filepath.Join(dir, "vol-vol-1/data"), "old-volume-data")
 	write(t, filepath.Join(dir, "pool-state.json"), "old-pool-state")
-	write(t, filepath.Join(dir, "meta.json"), `{"from":"0.5.0","to":"0.5.1","createdAt":"2026-10-28T12:00:00Z","volumes":["vol-1"]}`)
+	write(t, filepath.Join(dir, "meta.json"), `{"from":"0.5.0","k3s":"1.35","to":"0.5.1","createdAt":"2026-10-28T12:00:00Z","volumes":["vol-1"]}`)
 
 	n := 0
 	f.cfg = RestoreConfig{
-		RestorePointConfig: RestorePointConfig{VarLib: f.varLib, SnapshotsDir: f.snaps, PoolDir: f.pool, Version: "0.5.0", Keep: 2,
+		RestorePointConfig: RestorePointConfig{VarLib: f.varLib, SnapshotsDir: f.snaps, PoolDir: f.pool, Version: "0.5.0", K3s: "1.35", Keep: 2,
 			Now: func() time.Time { n++; return time.Date(2026, 10, 29, 9, 0, n, 0, time.UTC) }},
 		Copy: func(_ context.Context, src, dst string) error { return copyTree(src, dst) },
 	}
@@ -76,7 +76,7 @@ func newRestoreFixture(t *testing.T) *restoreFixture {
 }
 
 func (f *restoreFixture) request() error {
-	return RequestRestore(f.snaps, f.point, f.cfg.Version, time.Now())
+	return RequestRestore(f.snaps, f.point, f.cfg.Version, f.cfg.K3s, time.Now())
 }
 
 func TestARestoreReplacesTheStateAndKeepsTheOldOneAsARestorePoint(t *testing.T) {
@@ -134,13 +134,13 @@ func TestARestoreReplacesTheStateAndKeepsTheOldOneAsARestorePoint(t *testing.T) 
 
 func TestRestoreRefusesWhatItCannotDo(t *testing.T) {
 	f := newRestoreFixture(t)
-	if err := RequestRestore(f.snaps, "../etc", "0.5.0", time.Now()); err == nil {
+	if err := RequestRestore(f.snaps, "../etc", "0.5.0", "1.35", time.Now()); err == nil {
 		t.Fatal("a path is not a restore point")
 	}
-	if err := RequestRestore(f.snaps, "restore-20200101T000000Z-from-9.9", "0.5.0", time.Now()); err == nil {
+	if err := RequestRestore(f.snaps, "restore-20200101T000000Z-from-9.9", "0.5.0", "1.35", time.Now()); err == nil {
 		t.Fatal("an unknown point must be refused")
 	}
-	if err := RequestRestore(f.snaps, f.point, "0.6.0", time.Now()); err == nil || !strings.Contains(err.Error(), "matching appliance") {
+	if err := RequestRestore(f.snaps, f.point, "0.6.0", "1.36", time.Now()); err == nil || !strings.Contains(err.Error(), "start the appliance that matches it") {
 		t.Fatalf("a point from another appliance version must be refused with the reason: %v", err)
 	}
 	if err := f.request(); err != nil {
@@ -149,8 +149,9 @@ func TestRestoreRefusesWhatItCannotDo(t *testing.T) {
 	if err := f.request(); err == nil {
 		t.Fatal("a second request while one is waiting must be refused")
 	}
-	// The appliance changed between the request and the boot: nothing is touched.
-	f.cfg.Version = "0.6.0"
+	// The appliance changed to a different Kubernetes minor between the request and the boot:
+	// that is the one case a restore must refuse.
+	f.cfg.Version, f.cfg.K3s = "0.6.0", "1.36"
 	done, err := ApplyPendingRestore(context.Background(), f.fs, f.cfg)
 	if done || err == nil {
 		t.Fatal("a version mismatch at boot must refuse")
@@ -219,11 +220,11 @@ func TestAnInterruptedRestoreResumesWithoutTakingASecondSafetyPoint(t *testing.T
 
 func TestRestorePointsAreListedWithWhetherTheyCanBeRestored(t *testing.T) {
 	f := newRestoreFixture(t)
-	list, err := ListRestorePoints(f.snaps, "0.5.0")
+	list, err := ListRestorePoints(f.snaps, "0.5.0", "1.35")
 	if err != nil || len(list) != 1 || !list[0].Restorable || list[0].From != "0.5.0" || len(list[0].Volumes) != 1 {
 		t.Fatalf("%+v %v", list, err)
 	}
-	list, _ = ListRestorePoints(f.snaps, "0.6.0")
+	list, _ = ListRestorePoints(f.snaps, "0.6.0", "1.36")
 	if list[0].Restorable || list[0].Reason == "" {
 		t.Fatalf("%+v", list)
 	}
@@ -238,4 +239,48 @@ func countPoints(dir string) int {
 		}
 	}
 	return n
+}
+
+func TestAPointCanBeRestoredByALaterApplianceOnTheSameKubernetesMinor(t *testing.T) {
+	f := newRestoreFixture(t)
+	// 0.5.1 took the point of 0.5.0's state; 0.5.2 (same Kubernetes 1.35) can put it back.
+	if err := RequestRestore(f.snaps, f.point, "0.5.2", "1.35", time.Now()); err != nil {
+		t.Fatalf("the same Kubernetes minor must be restorable: %v", err)
+	}
+	list, _ := ListRestorePoints(f.snaps, "0.5.2", "1.35")
+	if !list[0].Restorable || list[0].K3s != "1.35" {
+		t.Fatalf("%+v", list[0])
+	}
+	// A point that does not say which Kubernetes took it cannot be trusted.
+	dir := filepath.Join(f.snaps, "restore-20261001T000000Z-from-0.4.2")
+	f.fs.subs[filepath.Join(dir, "system")] = true
+	write(t, filepath.Join(dir, "meta.json"), `{"from":"0.4.2","to":"0.4.2","createdAt":"2026-10-01T00:00:00Z"}`)
+	if err := RequestRestore(f.snaps, "restore-20261001T000000Z-from-0.4.2", "0.5.2", "1.35", time.Now()); err == nil || !strings.Contains(err.Error(), "Kubernetes version") {
+		t.Fatalf("an unlabelled point must be refused with the reason: %v", err)
+	}
+	if err := RequestRestore(f.snaps, f.point, "0.5.2", "1.36", time.Now()); err == nil || !strings.Contains(err.Error(), "1.35") {
+		t.Fatalf("a different Kubernetes minor must be refused with both versions: %v", err)
+	}
+}
+
+func TestAManualPointCanBeTakenAtAnyTime(t *testing.T) {
+	f := newRestoreFixture(t)
+	id, err := TakeManualRestorePoint(context.Background(), f.fs, f.cfg.RestorePointConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := readMeta(id)
+	if err != nil || m.Label != "manual" || m.From != "0.5.0" || m.K3s != "1.35" {
+		t.Fatalf("%+v %v", m, err)
+	}
+	list, _ := ListRestorePoints(f.snaps, "0.5.0", "1.35")
+	if len(list) != 2 || !list[0].Restorable {
+		t.Fatalf("%+v", list)
+	}
+	if err := RequestRestore(f.snaps, filepath.Base(id), "0.5.0", "1.35", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := ApplyPendingRestore(context.Background(), f.fs, f.cfg); !done || err != nil {
+		t.Fatalf("%v %v", done, err)
+	}
 }

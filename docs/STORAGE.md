@@ -74,8 +74,11 @@ snapshot of `@system` and of every pool volume (and keeps the driver's `state.js
 
 Capability `system-restore-v1`. A person lists the points and restores one in the launcher panel, or with
 `restore-point --operation list` and `restore-point --operation restore --id <point> --accept-data-loss`. No workload can ask
-for it. Only a point taken under **the appliance version now running** can be restored (K3s must not move backwards under
-its database); to go back across an appliance update, run the matching appliance first.
+for it. A point can be restored by the appliance that took it, and by a later appliance **on the same Kubernetes minor**: a
+restore is a deliberate step back, and K3s cannot read a datastore from a newer minor, so the appliance that matches an
+older point's minor must run first. Each point records which minor took it; a point that does not (anything from 0.4.2)
+is refused rather than guessed at. You can also take a point on demand (**Take a restore point now** in the panel), which
+is the way to keep a way back before a risky change without waiting for an appliance update.
 
 Asking records the request on the disk and restarts the appliance. The restore then runs in `init-data`, before K3s or
 anything else writes to the disk (`/var/lib` is mounted in the initrd, so it is replaced in place, not swapped):

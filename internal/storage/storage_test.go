@@ -36,7 +36,7 @@ func TestEnsureLayoutAndRestorePointOnVersionChange(t *testing.T) {
 	if err := EnsureLayout(context.Background(), fs, varLib); err != nil || len(fs.subs) != 3 {
 		t.Fatalf("the image cache and the journal are subvolumes: %v %v", err, fs.subs)
 	}
-	cfg := RestorePointConfig{VarLib: varLib, SnapshotsDir: snaps, PoolDir: pool, Version: "0.5.0", Keep: 2,
+	cfg := RestorePointConfig{VarLib: varLib, SnapshotsDir: snaps, PoolDir: pool, Version: "0.5.0", K3s: "1.35", Keep: 2,
 		Now: func() time.Time { return time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC) }}
 	if p, err := TakeRestorePointOnChange(context.Background(), fs, cfg); p != "" || err != nil {
 		t.Fatalf("a first boot must only record the version: %q %v", p, err)
