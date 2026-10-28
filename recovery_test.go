@@ -222,7 +222,7 @@ func TestRestorePlanReportsBlockersAndPrecedence(t *testing.T) {
 		t.Fatalf("%+v", plan)
 	}
 	q = p
-	q.DataBytes = 1 << 60
+	q.UsedBytes = 1 << 60
 	if plan := restorePlan(state, q); plan.Feasible || !strings.Contains(strings.Join(plan.Blockers, " "), "free") {
 		t.Fatalf("%+v", plan)
 	}

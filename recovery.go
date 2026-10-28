@@ -237,6 +237,7 @@ func runRecoveryJob(state string) {
 	if info, err := os.Stat(filepath.Join(state, "data.img")); err == nil {
 		p.DataBytes = info.Size()
 	}
+	p.UsedBytes, _ = allocatedBytes(filepath.Join(state, "data.img"))
 	p.Phase, p.SizeBytes, p.SHA256, p.Verified, p.FinishedAt = hostapi.PointComplete, size, sum, true, time.Now().UTC().Format(time.RFC3339)
 	_ = savePoint(state, p)
 	applyRetention(state, d)
@@ -470,7 +471,11 @@ func recoveryFacts(state string) ([]hostapi.RecoveryPoint, *hostapi.BackupSchedu
 // goes into a new, empty state directory with the exact appliance the point was taken with;
 // nothing here changes anything.
 func restorePlan(state string, p hostapi.RecoveryPoint) *hostapi.RestorePlan {
-	plan := &hostapi.RestorePlan{NeedsFreeBytes: p.DataBytes, ExpectedDataLoss: "Everything written after " + p.FinishedAt}
+	need := p.DataBytes
+	if p.UsedBytes > 0 {
+		need = p.UsedBytes + p.UsedBytes/10 + 256<<20 // a restore keeps the holes
+	}
+	plan := &hostapi.RestorePlan{NeedsFreeBytes: need, ExpectedDataLoss: "Everything written after " + p.FinishedAt}
 	block := func(s string) { plan.Blockers = append(plan.Blockers, s) }
 	if d, err := findDestination(state, p.Destination); err != nil {
 		block("The destination is no longer enrolled")
@@ -483,8 +488,8 @@ func restorePlan(state string, p hostapi.RecoveryPoint) *hostapi.RestorePlan {
 	if p.Arch != "" && p.Arch != runtime.GOARCH {
 		block("This point was taken on " + p.Arch + "; a cold disk restore needs the same architecture (this computer is " + runtime.GOARCH + ")")
 	}
-	if u, err := diskspace.Of(state); err == nil && p.DataBytes > 0 && u.Free < uint64(p.DataBytes) {
-		block(fmt.Sprintf("A restore writes the full %d GiB data disk; this computer has %d GiB free", p.DataBytes>>30, u.Free>>30))
+	if u, err := diskspace.Of(state); err == nil && need > 0 && u.Free < uint64(need) {
+		block(fmt.Sprintf("A restore needs about %d GiB free; this computer has %d GiB free", need>>30, u.Free>>30))
 	}
 	if cur, err := readManifest(filepath.Join(state, "release.json")); err == nil && p.ApplianceVersion != "" {
 		if cur.Version == p.ApplianceVersion {

@@ -88,7 +88,7 @@ A point is `verified` only after it was decrypted and read back completely, and 
 Points are encrypted with a key that lives in the launcher's state directory, never in the cluster or the destination. `HostStatus.status.host.recoveryKit` says whether the key exists and whether the person confirmed saving a copy elsewhere (**without one, a lost computer means unrestorable points**). Showing the key is launcher-only.
 `HostStatus.status.host.backupSchedule` reports `lastSuccess`, `lastAttempt`, `nextDue` and `objectiveBreached` (the newest verified point is older than the interval plus a grace period, for example because the destination was offline).
 Each complete point carries a computed `restorePlan`: `feasible`, `blockers` (file unreachable, wrong architecture, not enough free space), `warnings` (the key is not on this computer), `needsFreeBytes`, `expectedDataLoss` and `precedence` (which appliance the restore needs relative to the one running). It changes nothing; restoring is never automatic.
-Limits today: the data disk is sparse but a copy writes its full apparent size through fast compression, so a 100 GiB disk takes minutes (sparse-aware backup is tracked separately); restoring is the existing `restore` command into an empty state directory, with the key, and it writes the full apparent size of the data disk.
+The data disk is sparse and a copy carries only its data extents (a map plus the data), so a 100 GiB disk holding 3 GiB is a copy of about 3 GiB, and a restore keeps the holes. On a platform that cannot report holes (Windows today) the copy is dense. Restoring is the existing `restore` command into an empty state directory, with the key.
 
 ### `HostRegistryTrust` (cluster-scoped; administrator-created)
 

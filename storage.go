@@ -257,6 +257,15 @@ func createBackup(state, file string, recipient age.Recipient) error {
 			f.Close()
 			return e
 		}
+		if name == "data.img" {
+			if done, e := writeSparseDisk(tw, f, s.Size()); done {
+				f.Close()
+				if e != nil {
+					return e
+				}
+				continue
+			}
+		}
 		e = tw.WriteHeader(&tar.Header{Name: name, Mode: 0600, Size: s.Size()})
 		if e == nil {
 			_, e = io.Copy(tw, f)
@@ -327,6 +336,8 @@ func restore(state, file, keyPath string) error {
 	defer os.RemoveAll(stage)
 	tr := tar.NewReader(gz)
 	seen := map[string]bool{}
+	var sparse sparseMap
+	haveSparse := false
 	var metadataBytes int64
 	for {
 		h, e := tr.Next()
@@ -345,6 +356,18 @@ func restore(state, file, keyPath string) error {
 				return errors.New("backup metadata exceeds limit")
 			}
 		}
+		if h.Name == sparseMapName {
+			if seen["data.img"] {
+				return errors.New("the sparse map must come before the data")
+			}
+			raw, e := io.ReadAll(io.LimitReader(tr, h.Size))
+			if e != nil || json.Unmarshal(raw, &sparse) != nil {
+				return errors.New("invalid sparse map")
+			}
+			haveSparse = true
+			seen[h.Name] = true
+			continue
+		}
 		seen[h.Name] = true
 		if e := os.MkdirAll(filepath.Dir(filepath.Join(stage, filepath.FromSlash(h.Name))), 0700); e != nil {
 			return e
@@ -353,7 +376,11 @@ func restore(state, file, keyPath string) error {
 		if e != nil {
 			return e
 		}
-		_, e = io.Copy(f, tr)
+		if h.Name == "data.img" && haveSparse {
+			e = readSparseDisk(f, tr, sparse, h.Size)
+		} else {
+			_, e = io.Copy(f, tr)
+		}
 		if e == nil {
 			e = f.Sync()
 		}

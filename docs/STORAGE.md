@@ -91,7 +91,7 @@ Where each part lives: the starting size is the **appliance's** (`data_bytes` in
 into the app and the guest (`MaxDiskGiB`) and mirrored in the HostRequest schema in `platform/hostapi.yaml`.
 
 Things to know: host usage only grows (deleted data inside the VM is not guaranteed to shrink the file); backups and copies
-do not preserve sparseness yet, so a backup writes the full apparent size; and Finder, Time Machine and cloud sync can see
+encrypted backups and recovery points keep the holes (a map plus the data extents; Windows archives densely), but the update safety copy does not yet preserve sparseness; and Finder, Time Machine and cloud sync can see
 the apparent size.
 
 ### Direction for production (not built)

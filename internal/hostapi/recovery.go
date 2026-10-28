@@ -58,7 +58,8 @@ type RecoveryPoint struct {
 	// What a restore of this point needs to match.
 	ApplianceVersion string       `json:"applianceVersion,omitempty"`
 	Arch             string       `json:"arch,omitempty"`
-	DataBytes        int64        `json:"dataBytes,omitempty"`
+	DataBytes        int64        `json:"dataBytes,omitempty"` // the disk's size
+	UsedBytes        int64        `json:"usedBytes,omitempty"` // what it really occupied when copied
 	RestorePlan      *RestorePlan `json:"restorePlan,omitempty"`
 }
 
@@ -77,7 +78,7 @@ type RestorePlan struct {
 func (p RecoveryPoint) validate() error {
 	if !destinationID.MatchString(p.ID) || !destinationID.MatchString(p.Destination) || !validString(p.Trigger) ||
 		!validString(p.Phase) || !validString(p.Consistency) || !validString(p.StartedAt) || !validString(p.FinishedAt) ||
-		!validString(p.SHA256) || !validString(p.Error) || !validString(p.ApplianceVersion) || !validString(p.Arch) || p.SizeBytes < 0 || p.DataBytes < 0 || !validPlan(p.RestorePlan) {
+		!validString(p.SHA256) || !validString(p.Error) || !validString(p.ApplianceVersion) || !validString(p.Arch) || p.SizeBytes < 0 || p.DataBytes < 0 || p.UsedBytes < 0 || !validPlan(p.RestorePlan) {
 		return errors.New("invalid recovery point")
 	}
 	switch p.Phase {
