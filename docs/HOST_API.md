@@ -74,6 +74,8 @@ Phases: `Pending` → `Approved` → `Applied` or `Failed`; or `Rejected`, or `E
 lands only on the object with the same `uid` that the launcher saw. Status is written
 only by the bridge. Grant `containers-host-requester` in the requester's namespace.
 
+`HostStatus.status.host.dataDisk` shows the data disk as the host sees it: `sizeBytes` (what the cluster sees), `allocatedBytes` (what it really costs this computer; the file is sparse), `ceilingBytes`, `hostFreeFloorBytes` and `maxGrowthBytes` (how much it could grow right now). A `resources` request whose `diskGiB` would leave the computer below the free-space floor is refused when approved.
+
 ### `HostDestination` (cluster-scoped, read-only)
 
 A place the launcher can write backups to, enrolled by a person in the launcher panel (or `destinations --operation add --name ... --path ...`). No workload can enrol, change or remove one, and **no host path is ever published**.

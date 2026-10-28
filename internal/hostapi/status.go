@@ -28,6 +28,9 @@ func (f Facts) Validate() error {
 	if err := validateDestinations(f.Destinations); err != nil {
 		return err
 	}
+	if x := f.DataDisk; x != nil && (x.SizeBytes < 0 || x.AllocatedBytes < 0 || x.CeilingBytes < 0 || x.FreeFloorBytes < 0 || x.MaxGrowthBytes < 0) {
+		return errors.New("invalid data disk")
+	}
 	if err := validateRecovery(f); err != nil {
 		return err
 	}

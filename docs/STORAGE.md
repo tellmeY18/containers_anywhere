@@ -98,6 +98,7 @@ the apparent size.
 
 - **Ceiling as a launcher setting**, chosen by the person who owns the computer (stored with the cluster state, edited in the
   panel with a confirmation), with a high hard cap in code. Workloads can only request growth inside it.
+- **Built:** `HostStatus.status.host.dataDisk` reports `sizeBytes`, `allocatedBytes` (the real cost on this computer), `ceilingBytes`, `hostFreeFloorBytes` and `maxGrowthBytes`; a growth that would leave the computer with less than the floor (the larger of 20 GiB and a tenth of the volume) is refused at approval with the reason. Still planned: the ceiling as a launcher setting and optional preallocation.
 - **A host-free floor**: refuse growth if it would leave the host below a reserve (for example 10% or 20 GiB), not only if the
   growth does not fit.
 - **Optional reservation**: preallocate the space (macOS `F_PREALLOCATE`, Linux `fallocate`, Windows allocated size) so the VM can

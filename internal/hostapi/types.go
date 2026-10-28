@@ -92,6 +92,7 @@ type Facts struct {
 	RecoveryPoints []RecoveryPoint       `json:"recoveryPoints,omitempty"`
 	BackupSchedule *BackupScheduleStatus `json:"backupSchedule,omitempty"`
 	RecoveryKit    *RecoveryKit          `json:"recoveryKit,omitempty"`
+	DataDisk       *DataDisk             `json:"dataDisk,omitempty"`
 }
 
 type Disk struct {
@@ -142,4 +143,17 @@ type Status struct {
 	ClockSkewSeconds    *float64    `json:"clockSkewSeconds,omitempty"`
 	Guest               GuestFacts  `json:"guest"`
 	Conditions          []Condition `json:"conditions"`
+}
+
+// DataDisk is the host's view of the cluster's data disk, so a manager can see real headroom
+// before it asks for growth. The disk is a sparse file: SizeBytes is the ceiling the cluster
+// sees and AllocatedBytes is what it really costs this computer today.
+type DataDisk struct {
+	SizeBytes      int64 `json:"sizeBytes"`
+	AllocatedBytes int64 `json:"allocatedBytes"`
+	// CeilingBytes is the largest the disk may be made. MaxGrowthBytes is how much more it
+	// could grow right now: limited by the ceiling and by the host-free floor.
+	CeilingBytes   int64 `json:"ceilingBytes"`
+	FreeFloorBytes int64 `json:"hostFreeFloorBytes"`
+	MaxGrowthBytes int64 `json:"maxGrowthBytes"`
 }

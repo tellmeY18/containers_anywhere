@@ -226,6 +226,7 @@ func (b *hostBridge) facts() hostapi.Facts {
 		Update:    hostUpdateFact(b.state, b.m.Version), Gateway: gatewayFact(b.state, b.gw, lan),
 		Destinations: b.dest.facts(b.state)}
 	f.RecoveryPoints, f.BackupSchedule, f.RecoveryKit = recoveryFacts(b.state)
+	f.DataDisk = dataDiskFact(b.state)
 	return f
 }
 
@@ -310,6 +311,15 @@ func (b *hostBridge) checkApproval(a hostapi.Actionable) error {
 		return nil
 	}
 	r := a.Spec.Resources
+	if r.DiskGiB > 0 {
+		cur := int64(0)
+		if info, err := os.Stat(filepath.Join(b.state, "data.img")); err == nil {
+			cur = info.Size()
+		}
+		if err := diskGrowthRefusal(b.state, int64(r.DiskGiB)<<30, cur); err != nil {
+			return err
+		}
+	}
 	if err := validResources(r.CPUs, r.MemoryMiB); err != nil {
 		return err
 	}
