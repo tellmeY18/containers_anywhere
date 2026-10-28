@@ -9,8 +9,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tellmeY18/containers_anywhere/internal/protocol"
 )
 
 // ErrStateInconsistent means a restore failed and the previous state could not be put back: the
@@ -76,38 +79,94 @@ func readMeta(dir string) (restorePointMeta, error) {
 	return m, json.Unmarshal(b, &m)
 }
 
-// sameK3sMinor reports whether two "1.35.8+k3s1" strings name the same Kubernetes minor.
-func sameK3sMinor(a, b string) bool {
-	minor := func(v string) string {
-		core := strings.SplitN(v, "+", 2)[0]
-		parts := strings.Split(core, ".")
-		if len(parts) < 2 {
-			return ""
-		}
-		return parts[0] + "." + parts[1]
+// parseK3s turns "1.35.8+k3s1" into comparable numbers. ok is false when the string does not
+// name at least a major and a minor version.
+func parseK3s(v string) (parts [3]int, build int, ok bool) {
+	core, buildPart := strings.TrimPrefix(strings.TrimSpace(v), "v"), ""
+	if i := strings.Index(core, "+"); i >= 0 {
+		core, buildPart = core[:i], core[i+1:]
 	}
-	ma := minor(a)
-	return ma != "" && ma == minor(b)
+	fields := strings.Split(core, ".")
+	if len(fields) < 2 {
+		return parts, 0, false
+	}
+	for i := 0; i < len(fields) && i < len(parts); i++ {
+		n, err := strconv.Atoi(fields[i])
+		if err != nil {
+			return parts, 0, false
+		}
+		parts[i] = n
+	}
+	if i := strings.LastIndexFunc(buildPart, func(r rune) bool { return r < '0' || r > '9' }); i >= 0 {
+		build, _ = strconv.Atoi(buildPart[i+1:])
+	} else {
+		build, _ = strconv.Atoi(buildPart)
+	}
+	return parts, build, true
 }
 
-// restorable says whether this appliance can put a point's state back. A point from the same
-// appliance always can. A point from a different appliance can only be used when the Kubernetes
-// minor is the same: K3s cannot read a datastore written by a newer minor, and a restore is a
-// deliberate step back, so the older appliance may follow.
-func restorable(m restorePointMeta, currentVersion, currentK3s string) (bool, string) {
+// k3sOrder is negative when a is older than b.
+func k3sOrder(a [3]int, ab int, b [3]int, bb int) int {
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] - b[i]
+		}
+	}
+	return ab - bb
+}
+
+// contractOf reports the data contract a restore point's state declares.
+func contractOf(systemDir string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(systemDir, "containers-anywhere", "data-format.json"))
+	if err != nil {
+		return "", err
+	}
+	var f struct {
+		Contract string `json:"contract"`
+	}
+	if err := json.Unmarshal(b, &f); err != nil {
+		return "", err
+	}
+	return f.Contract, nil
+}
+
+// restorable says whether this appliance can put a point's state back, and why not when it
+// cannot. None of this is about appliance versions: a restore replaces the disk, and whatever
+// appliance boots next reads that disk, so the only question is whether the state and the running
+// appliance form a supported pair.
+//
+// The hard constraint is K3s, not Containers Anywhere: a K3s datastore is migrated forward on
+// start and never backwards, so state written by a newer K3s, or by another minor, cannot be
+// opened by the K3s in this appliance. That is the same one-way rule the launcher applies to
+// updates. The other half is the data contract, which the appliance checks before anything writes
+// to /var/lib.
+func restorable(systemDir string, m restorePointMeta, currentVersion, currentK3s string) (bool, string) {
 	if m.From == currentVersion {
 		return true, ""
 	}
-	switch {
-	case m.K3s == "":
-		return false, "this point does not record which Kubernetes version took it (" + m.From + "), so it cannot be checked for compatibility"
-	case currentK3s == "":
-		return false, "this appliance does not report its Kubernetes version, so the point cannot be checked"
-	case sameK3sMinor(m.K3s, currentK3s):
-		return true, ""
-	default:
-		return false, fmt.Sprintf("this point was taken with Kubernetes %s and this appliance runs %s; start the appliance that matches it first", m.K3s, currentK3s)
+	if m.K3s == "" {
+		return false, "this point does not record the Kubernetes version that wrote its state (" + m.From + "), so it cannot be checked for compatibility"
 	}
+	point, pb, pointOK := parseK3s(m.K3s)
+	now, nb, nowOK := parseK3s(currentK3s)
+	switch {
+	case !nowOK:
+		return false, "this appliance does not report its Kubernetes version, so the point cannot be checked"
+	case !pointOK:
+		return false, "the point records an unreadable Kubernetes version (" + m.K3s + ")"
+	case point[0] != now[0] || point[1] != now[1]:
+		return false, fmt.Sprintf("this point's state was written by Kubernetes %s and this appliance runs %s; K3s cannot open a datastore from another minor, so %s has to run to restore it, or take a point under this appliance first", m.K3s, currentK3s, m.From)
+	case k3sOrder(point, pb, now, nb) > 0:
+		return false, fmt.Sprintf("this point's state was written by Kubernetes %s, newer than this appliance's %s; K3s cannot step a datastore backwards, so %s has to run to restore it", m.K3s, currentK3s, m.From)
+	}
+	contract, err := contractOf(systemDir)
+	if err != nil {
+		return false, "the point's state has no readable data format marker, so this appliance cannot vouch for it"
+	}
+	if contract != protocol.DataContract {
+		return false, fmt.Sprintf("the point's state uses data format %q but this appliance supports %q", contract, protocol.DataContract)
+	}
+	return true, ""
 }
 
 // ListRestorePoints returns the points on this disk, newest first.
@@ -126,7 +185,7 @@ func ListRestorePoints(snapshotsDir, currentVersion, currentK3s string) ([]Resto
 		if err != nil {
 			p.Reason = "the restore point has no readable description"
 		} else {
-			p.Restorable, p.Reason = restorable(m, currentVersion, currentK3s)
+			p.Restorable, p.Reason = restorable(filepath.Join(snapshotsDir, e.Name(), "system"), m, currentVersion, currentK3s)
 		}
 		out = append(out, p)
 	}
@@ -235,7 +294,7 @@ func ApplyPendingRestore(ctx context.Context, fs FS, cfg RestoreConfig) (bool, e
 		os.Remove(path)
 		return finish(errors.New("the restore point is missing or damaged; nothing was changed"))
 	}
-	if ok, why := restorable(meta, cfg.Version, cfg.K3s); !ok {
+	if ok, why := restorable(filepath.Join(target, "system"), meta, cfg.Version, cfg.K3s); !ok {
 		os.Remove(path)
 		return finish(errors.New(why + "; nothing was changed"))
 	}

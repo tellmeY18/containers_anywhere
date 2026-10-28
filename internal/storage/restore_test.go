@@ -47,6 +47,7 @@ func newRestoreFixture(t *testing.T) *restoreFixture {
 	write(t, filepath.Join(f.varLib, "rancher/k3s/server/db/state.db"), "new-cluster-db")
 	write(t, filepath.Join(f.varLib, "kubelet/pods/p1/x"), "new-kubelet")
 	write(t, filepath.Join(f.varLib, "containers-anywhere/boot.json"), `{"version":"0.5.0"}`)
+	write(t, filepath.Join(f.varLib, "containers-anywhere/data-format.json"), `{"contract":"var-lib-btrfs-v1"}`)
 	write(t, filepath.Join(cache, "blob"), "cached-image")
 	write(t, filepath.Join(journal, "boot.journal"), "live-journal")
 	vol := filepath.Join(f.pool, "volumes", "vol-1")
@@ -61,6 +62,7 @@ func newRestoreFixture(t *testing.T) *restoreFixture {
 	f.fs.subs[filepath.Join(dir, "system")] = true
 	write(t, filepath.Join(dir, "system/rancher/k3s/server/db/state.db"), "old-cluster-db")
 	write(t, filepath.Join(dir, "system/containers-anywhere/boot.json"), `{"version":"0.5.0"}`)
+	write(t, filepath.Join(dir, "system/containers-anywhere/data-format.json"), `{"contract":"var-lib-btrfs-v1"}`)
 	f.fs.subs[filepath.Join(dir, "vol-vol-1")] = true
 	write(t, filepath.Join(dir, "vol-vol-1/data"), "old-volume-data")
 	write(t, filepath.Join(dir, "pool-state.json"), "old-pool-state")
@@ -140,7 +142,7 @@ func TestRestoreRefusesWhatItCannotDo(t *testing.T) {
 	if err := RequestRestore(f.snaps, "restore-20200101T000000Z-from-9.9", "0.5.0", "1.35", time.Now()); err == nil {
 		t.Fatal("an unknown point must be refused")
 	}
-	if err := RequestRestore(f.snaps, f.point, "0.6.0", "1.36", time.Now()); err == nil || !strings.Contains(err.Error(), "start the appliance that matches it") {
+	if err := RequestRestore(f.snaps, f.point, "0.6.0", "1.36", time.Now()); err == nil || !strings.Contains(err.Error(), "from another minor") {
 		t.Fatalf("a point from another appliance version must be refused with the reason: %v", err)
 	}
 	if err := f.request(); err != nil {
@@ -282,5 +284,23 @@ func TestAManualPointCanBeTakenAtAnyTime(t *testing.T) {
 	}
 	if done, err := ApplyPendingRestore(context.Background(), f.fs, f.cfg); !done || err != nil {
 		t.Fatalf("%v %v", done, err)
+	}
+}
+
+func TestRestoreFollowsTheK3sOneWayRule(t *testing.T) {
+	f := newRestoreFixture(t)
+	// Same minor, older patch: the newer appliance migrates the state forward, which is what an
+	// update already does. Same minor, newer patch is a step back and is refused.
+	if err := RequestRestore(f.snaps, f.point, "0.5.2", "1.35.9+k3s1", time.Now()); err != nil {
+		t.Fatalf("an older patch on the same minor must be restorable: %v", err)
+	}
+	write(t, filepath.Join(f.snaps, f.point, "meta.json"), `{"from":"0.5.1","k3s":"1.35.9+k3s1","to":"0.5.2","createdAt":"2026-10-28T12:00:00Z","volumes":["vol-1"]}`)
+	if err := RequestRestore(f.snaps, f.point, "0.5.0", "1.35.8+k3s1", time.Now()); err == nil || !strings.Contains(err.Error(), "backwards") {
+		t.Fatalf("state from a newer Kubernetes must be refused: %v", err)
+	}
+	// The data contract is checked too, because the appliance refuses a disk it does not know.
+	write(t, filepath.Join(f.snaps, f.point, "system/containers-anywhere/data-format.json"), `{"contract":"something-else"}`)
+	if err := RequestRestore(f.snaps, f.point, "0.5.2", "1.35.9+k3s1", time.Now()); err == nil || !strings.Contains(err.Error(), "data format") {
+		t.Fatalf("another data contract must be refused: %v", err)
 	}
 }

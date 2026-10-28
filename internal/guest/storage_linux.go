@@ -56,7 +56,7 @@ func initData(varLib string) error {
 	}
 	point, err := storage.TakeRestorePointOnChange(ctx, fs, storage.RestorePointConfig{
 		VarLib: varLib, SnapshotsDir: snapshotsDir, PoolDir: poolDir,
-		Version: os.Getenv("CA_APPLIANCE_VERSION"), K3s: k3sMinor(), Keep: 2,
+		Version: os.Getenv("CA_APPLIANCE_VERSION"), K3s: k3sVersion(), Keep: 2,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "restore point:", err)
@@ -83,14 +83,8 @@ func linkJournal(varLib string) {
 // endSession runs when the appliance shuts down, after the cluster has stopped.
 func endSession(varLib string) error { return storage.EndSession(varLib) }
 
-// k3sMinor is the Kubernetes major.minor this appliance runs ("1.35.8+k3s1" -> "1.35"). A restore
-// is only allowed inside one minor, because K3s never reads a datastore from a newer minor.
-func k3sMinor() string {
-	v := os.Getenv("CA_K3S_VERSION")
-	core := strings.SplitN(v, "+", 2)[0]
-	parts := strings.Split(core, ".")
-	if len(parts) < 2 {
-		return ""
-	}
-	return parts[0] + "." + parts[1]
+// k3sVersion is the Kubernetes version this appliance runs ("1.35.8+k3s1"), recorded on every
+// restore point so a later appliance can tell whether it may open that state.
+func k3sVersion() string {
+	return strings.TrimSpace(os.Getenv("CA_K3S_VERSION"))
 }

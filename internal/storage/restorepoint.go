@@ -22,8 +22,9 @@ type bootRecord struct {
 type restorePointMeta struct {
 	Label string `json:"label,omitempty"`
 	From  string `json:"from"`
-	// K3s is the Kubernetes minor the point's cluster ran. A restore is only safe under the same
-	// minor, because K3s never moves its datastore backwards between minors.
+	// K3s is the exact Kubernetes version that wrote the point's state. A restore is a step back
+	// for the appliance but never for K3s, which cannot open a datastore from a newer version or
+	// from another minor, so this is what decides whether the point can be restored at all.
 	K3s       string   `json:"k3s,omitempty"`
 	To        string   `json:"to"`
 	CreatedAt string   `json:"createdAt"`
@@ -36,7 +37,7 @@ type restorePointMeta struct {
 type RestorePointConfig struct {
 	VarLib, SnapshotsDir, PoolDir string
 	Version                       string
-	K3s                           string // the Kubernetes major.minor this appliance runs
+	K3s                           string // the Kubernetes version this appliance runs, e.g. 1.35.8+k3s1
 	Keep                          int
 	// Protect names a restore point that pruning must not remove (the one being restored from).
 	Protect string
