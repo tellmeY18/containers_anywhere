@@ -102,8 +102,8 @@ spec:
       message: Management namespaces cannot publish application routes.
     - expression: "!has(object.spec.defaultBackend) && has(object.spec.rules) && size(object.spec.rules) > 0"
       message: Explicit hostname rules are required; default backends are forbidden.
-    - expression: "object.spec.rules.all(r, has(r.host) && r.host.matches('^[a-z0-9][a-z0-9.-]*$') && (r.host.endsWith('.' + object.metadata.namespace + '.localhost') || r.host.endsWith('.' + object.metadata.namespace + '.local') || (object.metadata.namespace == 'containers-demo' && object.metadata.name == 'demo' && r.host in ['demo.local', 'demo.localhost'])))"
-      message: Hostnames must be beneath <namespace>.localhost or <namespace>.local.
+    - expression: "object.spec.rules.all(r, has(r.host) && r.host.matches('^[a-z0-9][a-z0-9.-]*$') && (r.host.endsWith('.' + object.metadata.namespace + '.localhost') || r.host.endsWith('.' + object.metadata.namespace + '.local') || (object.metadata.namespace != 'demo' && r.host in [object.metadata.namespace + '.local', object.metadata.namespace + '.localhost']) || (object.metadata.namespace == 'containers-demo' && object.metadata.name == 'demo' && r.host in ['demo.local', 'demo.localhost'])))"
+      message: Hostnames must be beneath <namespace>.localhost or <namespace>.local, or be the namespace's own name.
     - expression: "!has(object.metadata.annotations) || object.metadata.annotations.all(k, !k.startsWith('traefik.') && k != 'kubernetes.io/ingress.class')"
       message: Traefik annotations are not supported by the appliance route contract.
     - expression: "!has(object.spec.tls) || size(object.spec.tls) == 0"
