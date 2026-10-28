@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"filippo.io/age"
 	"fmt"
 	"io"
 	"net"
@@ -305,6 +306,12 @@ func desktop(state, bundle string) error {
 			io.WriteString(w, `{"pending":[]}`)
 			return
 		}
+		if r.Method == "GET" && r.URL.Path == "/recovery" {
+			w.Header().Set("Content-Type", "application/json")
+			points, sched, kit := recoveryFacts(state)
+			json.NewEncoder(w).Encode(map[string]any{"points": points, "schedule": sched, "kit": kit})
+			return
+		}
 		if r.Method == "GET" && r.URL.Path == "/destinations" {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{"destinations": describeDestinations(state)})
@@ -468,6 +475,15 @@ func desktop(state, bundle string) error {
 			if err == nil {
 				_, err = controlCall(cc, "POST", "/control/host/requests/"+body.UID+"/"+strings.TrimPrefix(r.URL.Path, "/host/"), nil, 30*time.Second)
 			}
+		case "/recovery/key":
+			// Exporting the key is launcher-only: it is shown here and nowhere in the cluster.
+			var id *age.X25519Identity
+			if id, err = recoveryIdentity(state); err == nil {
+				io.WriteString(w, id.String()+"\n")
+				return
+			}
+		case "/recovery/key-saved":
+			err = atomicWrite(filepath.Join(state, keyExportedFile), []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0600)
 		case "/destinations/add", "/destinations/remove":
 			// Enrolling a destination is a launcher-only act, like approving a request.
 			var body struct {
@@ -573,6 +589,7 @@ const desktopHTML = `<!doctype html><html lang="en"><meta charset="utf-8"><meta 
 <div id="workloads"></div>
 <h2>Requests</h2><div id="requests" role="status"></div>
 <h2>Backup destinations</h2><p><small>Folders or disks that backups can be written to. A destination on the same disk as your data is not disaster recovery.</small></p><div id="destinations" role="status"></div><p><input id="dest-name" placeholder="Name, for example Backup disk" maxlength="80"> <input id="dest-path" placeholder="Folder, for example /Volumes/Backup" size="34"> <button id="dest-add">Add destination</button></p>
+<h2>Recovery points</h2><p><small>Whole-appliance copies, encrypted before they reach a destination. Each one stops the appliance for a few minutes. This is not point-in-time recovery of any application.</small></p><div id="recovery" role="status"></div><p><button id="key-show">Show recovery key</button> <button id="key-saved">I saved the key somewhere else</button></p><pre id="key-box" hidden></pre>
 <h2>Store</h2><p><small>Community deployments found on GitHub (topic containers-anywhere). Nothing here is verified: installing one runs its publisher's code on your cluster.</small></p><div id="store" role="status"></div><button id="store-refresh">Refresh list</button>
 <details><summary>Advanced updates (makes a safety copy of your data first)</summary>
 <p id="update-status" role="status"></p>
@@ -589,7 +606,7 @@ document.getElementById('update-swap').onclick=async()=>{if(!confirm('Update now
 let opened=false;async function poll(){try{let s=JSON.parse(await call('status'));updateStatus(s);applianceUpdate(s);document.getElementById('phase').textContent=s.phase;document.getElementById('detail').textContent=s.detail;document.getElementById('setup').hidden=!s.setupRequired;document.getElementById('restart').hidden=!s.restartRequired;document.getElementById('start').disabled=s.setupRequired||s.restartRequired||s.phase==='setup';document.getElementById('gateway-status').textContent=s.gateway?[s.gateway.error,s.gateway.processError,s.gateway.discoveryError].filter(Boolean).join(' · '):'';workloads(s.gateway);let a=document.getElementById('kite');a.hidden=!s.kiteURL;if(s.kiteURL){a.href=s.kiteURL;if(!opened){opened=true;document.title='Ready — Containers Anywhere'}}}catch(e){document.getElementById('detail').textContent=e.message}setTimeout(poll,2500)}
 for(let op of ['prepare','activate','commit','cancel'])document.getElementById('update-'+op).onclick=async()=>{let warnings={prepare:'Stop the cluster and prepare a local cold recovery point? This is not off-device protection.',activate:'Candidate workloads can execute cron, webhooks and external writes immediately. There is no isolation or automatic rollback. Activate or retry with the CURRENT disk?',commit:'Have you verified your workload data/PVC markers and credentials through this candidate? K3s/Kite health alone is insufficient.',cancel:'Cancel preparation without deleting retained evidence?'};if(!confirm(warnings[op]))return;try{document.getElementById('output').textContent=await call('update/'+op,'POST',{external_effects:op==='activate',workloads_validated:op==='commit'})}catch(e){document.getElementById('output').textContent=e.message}};
 for(let name of ['start','stop','quit','logs','setup','restart'])document.getElementById(name).onclick=async()=>{if(name==='restart'&&!confirm('Save your work first. Restart Windows now?'))return;try{let text=await call(name,name==='logs'?'GET':'POST');document.getElementById('output').textContent=text}catch(e){document.getElementById('output').textContent=e.message}};poll();
-let hostText={resources:r=>'Resize the appliance to '+r.resources.cpus+' CPUs and '+r.resources.memoryMiB+' MiB of memory'+(r.resources.diskGiB?' and grow its data disk to '+r.resources.diskGiB+' GiB (never shrinks)':'')+' (takes effect at the next restart)',power:r=>'Appliance: '+r.power.action,autostart:r=>(r.autostart.enabled?'Start':'Do not start')+' Containers Anywhere automatically at login','prune-images':r=>'Remove unused container images (volumes and images in use are never touched)','lan-check':r=>'Check this computer\'s network addresses'};
+let hostText={resources:r=>'Resize the appliance to '+r.resources.cpus+' CPUs and '+r.resources.memoryMiB+' MiB of memory'+(r.resources.diskGiB?' and grow its data disk to '+r.resources.diskGiB+' GiB (never shrinks)':'')+' (takes effect at the next restart)',power:r=>'Appliance: '+r.power.action,'recovery-point':r=>'Stop the appliance for a few minutes, write an encrypted recovery point of everything to destination '+r.recoveryPoint.destination+', check it, and start again','backup-schedule':r=>r.backupSchedule.enabled?'Every '+r.backupSchedule.everyHours+' hours, between '+r.backupSchedule.windowStartHour+':00 and '+((r.backupSchedule.windowStartHour+r.backupSchedule.windowHours)%24)+':00, stop the appliance for a few minutes and write a recovery point to '+r.backupSchedule.destination+', keeping the newest '+r.backupSchedule.keepLast:'Cancel the scheduled recovery points',autostart:r=>(r.autostart.enabled?'Start':'Do not start')+' Containers Anywhere automatically at login','prune-images':r=>'Remove unused container images (volumes and images in use are never touched)','lan-check':r=>'Check this computer\'s network addresses'};
 async function loadRequests(){try{let d=JSON.parse(await call('host/requests'));let box=document.getElementById('requests');box.replaceChildren();let list=d.pending||[];if(!list.length){box.textContent='No requests are waiting.';return}for(let r of list){let row=document.createElement('p');let who=document.createElement('strong');who.textContent=r.namespace+'/'+r.name;let what=(hostText[r.spec.type]||(()=>r.spec.type))(r.spec);row.append(who,' asks: ',what);if(r.spec.reason){let why=document.createElement('small');why.textContent=' ('+r.spec.reason+')';row.append(why)}for(let verb of ['approve','reject']){let b=document.createElement('button');b.textContent=verb==='approve'?'Approve':'Reject';b.onclick=async()=>{if(verb==='approve'&&!confirm('Approve this request?\n\n'+what))return;try{await call('host/'+verb,'POST',{uid:r.uid})}catch(e){document.getElementById('output').textContent=e.message}loadRequests()};row.append(' ',b)}box.append(row)}}catch(e){}}
 function storeLine(box,text,small){let p=document.createElement(small?'small':'p');p.textContent=text;box.appendChild(p);if(small)box.appendChild(document.createElement('br'))}
 async function installEntry(e){try{let r=JSON.parse(await call('store/review?repo='+encodeURIComponent(e.repo)));let lines=['Install '+r.repo+' (UNVERIFIED)?','','Risk: '+r.risk,'Resources: '+r.summary.kinds.join(', '),'Namespaces: '+(r.summary.namespaces.join(', ')||'none'),'Images: '+(r.summary.images.join(', ')||'none')];for(let k of r.summary.risks)lines.push((k.level==='high'?'HIGH: ':'Note: ')+k.text);lines.push('','Manifest: '+r.manifestURL,'SHA-256: '+r.sha256,'','Installing gives its publisher the access above. Read the manifest first.');if(!confirm(lines.join('\n')))return;if(r.risk==='high'&&prompt('This is high risk. Type the repository name to continue: '+r.repo)!==r.repo)return;await call('store/install','POST',{repo:r.repo,sha256:r.sha256});document.getElementById('output').textContent='Installed '+r.repo+'. It may take a few minutes to start; follow it in Kite.';loadStore()}catch(x){document.getElementById('output').textContent=x.message}}
@@ -597,6 +614,10 @@ async function loadStore(){try{let d=JSON.parse(await call('store'));let box=doc
 document.getElementById('store-refresh').onclick=async()=>{try{await call('store/refresh','POST');setTimeout(loadStore,1500)}catch(x){document.getElementById('output').textContent=x.message}};
 async function loadDestinations(){try{let d=JSON.parse(await call('destinations'));let box=document.getElementById('destinations');box.replaceChildren();let list=d.destinations||[];if(!list.length){box.textContent='No destinations yet.';return}for(let x of list){let row=document.createElement('p');let n=document.createElement('strong');n.textContent=x.name;let free=x.available?(Math.round(x.freeBytes/1073741824*10)/10)+' GiB free':'unavailable: '+x.lastError;row.append(n,' ('+x.path+') ',free);if(x.sameDeviceAsData){let w=document.createElement('small');w.textContent=' Same disk as your data: not disaster recovery.';row.append(w)}let b=document.createElement('button');b.textContent='Remove';b.onclick=async()=>{if(!confirm('Stop using this destination? Files already in the folder are not deleted.'))return;try{await call('destinations/remove','POST',{id:x.id})}catch(e){document.getElementById('output').textContent=e.message}loadDestinations()};row.append(' ',b);box.append(row)}}catch(e){}}
 document.getElementById('dest-add').onclick=async()=>{try{await call('destinations/add','POST',{name:document.getElementById('dest-name').value,path:document.getElementById('dest-path').value});document.getElementById('dest-name').value='';document.getElementById('dest-path').value=''}catch(e){document.getElementById('output').textContent=e.message}loadDestinations()};
+async function loadRecovery(){try{let d=JSON.parse(await call('recovery'));let box=document.getElementById('recovery');box.replaceChildren();let s=d.schedule;if(s&&s.enabled){let p=document.createElement('p');p.textContent='Schedule: every '+s.everyHours+' h to '+s.destination+', keeping '+s.keepLast+(s.objectiveBreached?'. BEHIND: '+s.note:'. Next due '+s.nextDue);box.append(p)}if(d.kit&&d.kit.note){let p=document.createElement('p');p.textContent=d.kit.note;box.append(p)}let list=(d.points||[]).slice().reverse().slice(0,8);if(!list.length&&!(s&&s.enabled)){box.append('No recovery points yet.');return}for(let x of list){let p=document.createElement('p');p.textContent=x.startedAt+'  '+x.destination+'  '+x.phase+(x.verified?' (verified)':'')+(x.error?': '+x.error:'');box.append(p)}}catch(e){}}
+document.getElementById('key-show').onclick=async()=>{try{let k=await call('recovery/key','POST',{});let b=document.getElementById('key-box');b.textContent=k;b.hidden=false}catch(e){document.getElementById('output').textContent=e.message}};
+document.getElementById('key-saved').onclick=async()=>{try{await call('recovery/key-saved','POST',{});document.getElementById('key-box').hidden=true;document.getElementById('key-box').textContent=''}catch(e){document.getElementById('output').textContent=e.message}loadRecovery()};
+setInterval(loadRecovery,10000);loadRecovery();
 setInterval(loadDestinations,15000);loadDestinations();
 setInterval(loadRequests,4000);loadRequests();setInterval(loadStore,15000);loadStore();</script></html>`
 

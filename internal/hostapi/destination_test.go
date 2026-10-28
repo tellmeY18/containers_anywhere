@@ -97,3 +97,61 @@ func TestAnUnavailableDestinationReportsWhy(t *testing.T) {
 		t.Fatalf("%+v", st.Conditions)
 	}
 }
+
+func TestRecoveryRequestValidation(t *testing.T) {
+	good := []RequestSpec{
+		{Type: TypeRecoveryPoint, RecoveryPoint: &RecoveryPointSpec{Destination: "usb-1"}},
+		{Type: TypeBackupSchedule, BackupSchedule: &BackupScheduleSpec{Enabled: true, Destination: "usb-1", EveryHours: 24, KeepLast: 7, WindowStartHour: 2, WindowHours: 4}},
+		{Type: TypeBackupSchedule, BackupSchedule: &BackupScheduleSpec{Enabled: false}},
+	}
+	for _, s := range good {
+		if err := s.Validate(); err != nil {
+			t.Errorf("%+v: %v", s, err)
+		}
+	}
+	bad := []RequestSpec{
+		{Type: TypeRecoveryPoint},
+		{Type: TypeRecoveryPoint, RecoveryPoint: &RecoveryPointSpec{Destination: "../x"}},
+		{Type: TypeRecoveryPoint, RecoveryPoint: &RecoveryPointSpec{Destination: "usb-1"}, Power: &PowerSpec{Action: "shutdown"}},
+		{Type: TypeBackupSchedule, BackupSchedule: &BackupScheduleSpec{Enabled: true, Destination: "usb-1", EveryHours: 1, KeepLast: 7, WindowHours: 4}},
+		{Type: TypeBackupSchedule, BackupSchedule: &BackupScheduleSpec{Enabled: true, Destination: "usb-1", EveryHours: 24, KeepLast: 0, WindowHours: 4}},
+		{Type: TypeBackupSchedule, BackupSchedule: &BackupScheduleSpec{Enabled: true, Destination: "usb-1", EveryHours: 24, KeepLast: 3, WindowStartHour: 24, WindowHours: 4}},
+		{Type: TypeBackupSchedule, BackupSchedule: &BackupScheduleSpec{Enabled: true, Destination: "usb-1", EveryHours: 24, KeepLast: 3}},
+	}
+	for _, s := range bad {
+		if s.Validate() == nil {
+			t.Errorf("must be refused: %+v", s)
+		}
+	}
+}
+
+func TestRecoveryPointsArePublishedFromFreshFactsOnly(t *testing.T) {
+	k := &fakeKube{get: map[string]string{RecoveryPointResource: `{"items":[{"metadata":{"name":"old"}}]}`}}
+	now := time.Date(2026, 10, 28, 10, 0, 0, 0, time.UTC)
+	c := newController(k, &now)
+	f := goodFacts(now)
+	f.RecoveryPoints = []RecoveryPoint{{ID: "rp-1", Destination: "usb-1", Trigger: "request", Phase: PointComplete, Consistency: "stopped", StartedAt: "2026-10-28T09:00:00Z", Verified: true}}
+	if err := c.SetFacts(f); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ReconcileRecoveryPoints(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var applied, deletedOld bool
+	for _, call := range k.calls {
+		if call.args[0] == "apply" && strings.Contains(call.input, `"kind":"HostRecoveryPoint"`) {
+			applied = true
+		}
+		if call.args[0] == "delete" && strings.Contains(strings.Join(call.args, " "), "old") {
+			deletedOld = true
+		}
+	}
+	if !applied || !deletedOld {
+		t.Fatalf("applied=%v deletedOld=%v", applied, deletedOld)
+	}
+	bad := goodFacts(now)
+	bad.RecoveryPoints = []RecoveryPoint{{ID: "rp-1", Destination: "usb-1", Trigger: "request", Phase: "Bogus", Consistency: "stopped", StartedAt: "x"}}
+	if bad.Validate() == nil {
+		t.Fatal("an unknown phase must be refused")
+	}
+}

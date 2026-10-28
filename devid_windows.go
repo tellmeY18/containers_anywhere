@@ -3,6 +3,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -14,4 +15,12 @@ func deviceID(path string) (string, error) {
 		return "", err
 	}
 	return "vol:" + strings.ToLower(filepath.VolumeName(abs)), nil
+}
+
+func allocatedBytes(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
 }

@@ -87,18 +87,22 @@ spec:
               type: object
               required: [type]
               x-kubernetes-validations:
-                - rule: "self.type != 'resources' || (has(self.resources) && !has(self.power) && !has(self.autostart))"
+                - rule: "self.type != 'resources' || (has(self.resources) && !has(self.power) && !has(self.autostart) && !has(self.recoveryPoint) && !has(self.backupSchedule))"
                   message: A resources request carries only the resources parameters.
-                - rule: "self.type != 'power' || (has(self.power) && !has(self.resources) && !has(self.autostart))"
+                - rule: "self.type != 'power' || (has(self.power) && !has(self.resources) && !has(self.autostart) && !has(self.recoveryPoint) && !has(self.backupSchedule))"
                   message: A power request carries only the power parameters.
-                - rule: "self.type != 'autostart' || (has(self.autostart) && !has(self.resources) && !has(self.power))"
+                - rule: "self.type != 'autostart' || (has(self.autostart) && !has(self.resources) && !has(self.power) && !has(self.recoveryPoint) && !has(self.backupSchedule))"
                   message: An autostart request carries only the autostart parameters.
-                - rule: "!(self.type in ['prune-images', 'lan-check']) || (!has(self.resources) && !has(self.power) && !has(self.autostart))"
+                - rule: "self.type != 'recovery-point' || (has(self.recoveryPoint) && !has(self.resources) && !has(self.power) && !has(self.autostart) && !has(self.backupSchedule))"
+                  message: A recovery-point request carries only the recoveryPoint parameters.
+                - rule: "self.type != 'backup-schedule' || (has(self.backupSchedule) && !has(self.resources) && !has(self.power) && !has(self.autostart) && !has(self.recoveryPoint))"
+                  message: A backup-schedule request carries only the backupSchedule parameters.
+                - rule: "!(self.type in ['prune-images', 'lan-check']) || (!has(self.resources) && !has(self.power) && !has(self.autostart) && !has(self.recoveryPoint) && !has(self.backupSchedule))"
                   message: This request type takes no parameters.
               properties:
                 type:
                   type: string
-                  enum: [resources, power, autostart, prune-images, lan-check]
+                  enum: [resources, power, autostart, prune-images, lan-check, recovery-point, backup-schedule]
                 reason:
                   type: string
                   maxLength: 256
@@ -132,6 +136,44 @@ spec:
                   properties:
                     enabled:
                       type: boolean
+                recoveryPoint:
+                  type: object
+                  required: [destination]
+                  description: >-
+                    Stops the appliance, writes an encrypted whole-appliance copy to the destination and starts it
+                    again. A person approves it in the launcher. Not point-in-time recovery of any application.
+                  properties:
+                    destination:
+                      type: string
+                      pattern: '^[a-z0-9][a-z0-9-]{0,62}$'
+                backupSchedule:
+                  type: object
+                  required: [enabled]
+                  description: >-
+                    Cold recovery points on a timetable. Approving it consents to the downtime, but only inside the
+                    window (the launcher computer's local time). enabled=false cancels the schedule.
+                  properties:
+                    enabled:
+                      type: boolean
+                    destination:
+                      type: string
+                      pattern: '^[a-z0-9][a-z0-9-]{0,62}$'
+                    everyHours:
+                      type: integer
+                      minimum: 6
+                      maximum: 720
+                    keepLast:
+                      type: integer
+                      minimum: 1
+                      maximum: 30
+                    windowStartHour:
+                      type: integer
+                      minimum: 0
+                      maximum: 23
+                    windowHours:
+                      type: integer
+                      minimum: 1
+                      maximum: 24
             status:
               type: object
               properties:
@@ -260,6 +302,54 @@ spec:
               type: object
               x-kubernetes-preserve-unknown-fields: true
 ---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: hostrecoverypoints.host.containersanywhere.dev
+spec:
+  group: host.containersanywhere.dev
+  scope: Cluster
+  names:
+    plural: hostrecoverypoints
+    singular: hostrecoverypoint
+    kind: HostRecoveryPoint
+    shortNames: [hrp]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Destination
+          type: string
+          jsonPath: .status.destination
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Verified
+          type: boolean
+          jsonPath: .status.verified
+        - name: Size
+          type: integer
+          jsonPath: .status.sizeBytes
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: >-
+            A whole-appliance recovery point written by the launcher. Read-only. consistency is what was actually
+            achieved (stopped = the appliance was shut down first). This is not point-in-time recovery of any application.
+          properties:
+            apiVersion: {type: string}
+            kind: {type: string}
+            metadata: {type: object}
+            spec:
+              type: object
+              maxProperties: 0
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
 # Workloads read host truth; they never write it. Administrators bind these roles
 # explicitly with a RoleBinding or ClusterRoleBinding to named service accounts.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -268,7 +358,7 @@ metadata:
   name: containers-host-reader
 rules:
   - apiGroups: [host.containersanywhere.dev]
-    resources: [hoststatuses, hostregistrytrusts, hostdestinations]
+    resources: [hoststatuses, hostregistrytrusts, hostdestinations, hostrecoverypoints]
     verbs: [get, list, watch]
 ---
 # Requests are created in the requester's own namespace and read back. A request
@@ -295,7 +385,7 @@ spec:
       - apiGroups: [host.containersanywhere.dev]
         apiVersions: [v1alpha1]
         operations: [CREATE, UPDATE, DELETE]
-        resources: [hoststatuses, hoststatuses/status, hostrequests/status, hostregistrytrusts/status, hostdestinations, hostdestinations/status]
+        resources: [hoststatuses, hoststatuses/status, hostrequests/status, hostregistrytrusts/status, hostdestinations, hostdestinations/status, hostrecoverypoints, hostrecoverypoints/status]
   validations:
     - expression: "request.userInfo.username == 'system:admin'"
       message: Host status and request status are written only by the appliance's host bridge.

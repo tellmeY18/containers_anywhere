@@ -94,18 +94,39 @@ func (c *Controller) ReconcileDestinations(ctx context.Context) error {
 	if skip {
 		return nil
 	}
-	want := map[string]bool{}
+	var objs []publishedObject
 	for _, d := range facts.Destinations {
-		want[d.ID] = true
-		if _, err := c.Run(ctx, objectApply("HostDestination", d.ID), "apply", "--server-side", "--field-manager=containers-host-api", "-f", "-"); err != nil {
+		objs = append(objs, publishedObject{Name: d.ID, Status: destinationState(d)})
+	}
+	if err := c.reconcileObjects(ctx, DestinationResource, "HostDestination", objs); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.destWritten, c.destKey, c.destWrite = true, key, now
+	c.mu.Unlock()
+	return nil
+}
+
+type publishedObject struct {
+	Name   string
+	Status any
+}
+
+// reconcileObjects makes the cluster-scoped, read-only objects of one kind match what the
+// host reported: it applies each, writes its status, and deletes the ones that are gone.
+func (c *Controller) reconcileObjects(ctx context.Context, resource, kind string, objs []publishedObject) error {
+	want := map[string]bool{}
+	for _, o := range objs {
+		want[o.Name] = true
+		if _, err := c.Run(ctx, objectApply(kind, o.Name), "apply", "--server-side", "--field-manager=containers-host-api", "-f", "-"); err != nil {
 			return err
 		}
-		patch, _ := json.Marshal([]map[string]any{{"op": "add", "path": "/status", "value": destinationState(d)}})
-		if _, err := c.Run(ctx, nil, "patch", DestinationResource, d.ID, "--subresource=status", "--type=json", "-p", string(patch)); err != nil {
+		patch, _ := json.Marshal([]map[string]any{{"op": "add", "path": "/status", "value": o.Status}})
+		if _, err := c.Run(ctx, nil, "patch", resource, o.Name, "--subresource=status", "--type=json", "-p", string(patch)); err != nil {
 			return err
 		}
 	}
-	out, err := c.Run(ctx, nil, "get", DestinationResource, "-o", "json")
+	out, err := c.Run(ctx, nil, "get", resource, "-o", "json")
 	if err != nil {
 		return err
 	}
@@ -119,13 +140,16 @@ func (c *Controller) ReconcileDestinations(ctx context.Context) error {
 	}
 	for _, it := range list.Items {
 		if !want[it.Metadata.Name] {
-			if _, err := c.Run(ctx, nil, "delete", DestinationResource, it.Metadata.Name, "--ignore-not-found"); err != nil {
+			if _, err := c.Run(ctx, nil, "delete", resource, it.Metadata.Name, "--ignore-not-found"); err != nil {
 				return err
 			}
 		}
 	}
-	c.mu.Lock()
-	c.destWritten, c.destKey, c.destWrite = true, key, now
-	c.mu.Unlock()
 	return nil
+}
+
+func recoveryKey(list []RecoveryPoint) string {
+	c := append([]RecoveryPoint(nil), list...)
+	b, _ := json.Marshal(c)
+	return string(b)
 }

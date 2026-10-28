@@ -29,9 +29,12 @@ type Controller struct {
 	lastError  string
 	crdMissing bool
 
-	destWritten bool
-	destKey     string
-	destWrite   time.Time
+	pointsWritten bool
+	pointsKey     string
+	pointsWrite   time.Time
+	destWritten   bool
+	destKey       string
+	destWrite     time.Time
 }
 
 func (c *Controller) now() time.Time {

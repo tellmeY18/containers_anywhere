@@ -88,7 +88,10 @@ type Facts struct {
 	Update            Update    `json:"update"`
 	Gateway           Gateway   `json:"gateway"`
 	// Destinations are the backup destinations enrolled in the launcher (see HostDestination).
-	Destinations []Destination `json:"destinations,omitempty"`
+	Destinations   []Destination         `json:"destinations,omitempty"`
+	RecoveryPoints []RecoveryPoint       `json:"recoveryPoints,omitempty"`
+	BackupSchedule *BackupScheduleStatus `json:"backupSchedule,omitempty"`
+	RecoveryKit    *RecoveryKit          `json:"recoveryKit,omitempty"`
 }
 
 type Disk struct {

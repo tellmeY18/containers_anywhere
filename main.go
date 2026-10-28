@@ -175,11 +175,13 @@ func saveJSON(path string, v any) error {
 }
 
 func serve(state, bundle string, port int, noOpen bool) error {
+	reconcileInterruptedRecovery(state)
 	for {
 		err := serveUpdate(state, bundle, port, noOpen, false)
 		if err != nil || !restartAfterStop.CompareAndSwap(true, false) {
 			return err
 		}
+		runRecoveryJob(state) // the appliance has stopped and the data lock is free
 		log.Print("Restarting the appliance as requested in the launcher")
 	}
 }

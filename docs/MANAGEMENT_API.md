@@ -28,8 +28,8 @@ and the host is reachable through the Kubernetes API. Managers never get a bespo
 |---|---|---|
 | `host.containersanywhere.dev` | `HostStatus`, `HostRequest`, `HostRegistryTrust` | **built** |
 | `networking.containersanywhere.dev` | `WorkloadPublication` | **built** |
-| `host.containersanywhere.dev` | `HostDestination` (read-only status; S3-compatible endpoint with separate writer and reader secrets) | planned, #14 |
-| `host.containersanywhere.dev` | `HostRecoveryPoint`, `HostBackupSchedule` | planned, #15 |
+| `host.containersanywhere.dev` | `HostDestination` (read-only; local folder or disk) | **built**, #14; the S3-compatible endpoint is deferred |
+| `host.containersanywhere.dev` | `HostRecoveryPoint` (read-only); `HostRequest` types `recovery-point` and `backup-schedule` | **built** (cold, encrypted, verified), #15 |
 | `host.containersanywhere.dev` | `HostQuiesceHook`, `HostRestorePlan`, `HostRestoreDrill` | planned, #16 |
 | `host.containersanywhere.dev` | `HostRequest` types `power`, `autostart`, `prune-images`; `HostStatus` autostart, logs and storage accounting | **built** in 0.3.0; #17 and #18 stay open only for unverified acceptance (tracked in #20) |
 | `host.containersanywhere.dev` | `HostUpdate` (prepare a candidate; activation stays launcher-only) | planned, #20 |

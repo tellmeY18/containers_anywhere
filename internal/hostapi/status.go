@@ -28,6 +28,9 @@ func (f Facts) Validate() error {
 	if err := validateDestinations(f.Destinations); err != nil {
 		return err
 	}
+	if err := validateRecovery(f); err != nil {
+		return err
+	}
 	if len(f.Update.RetainedRecoveryPoints) > 32 || len(f.Gateway.BoundAddresses) > 32 {
 		return errors.New("too many list entries")
 	}

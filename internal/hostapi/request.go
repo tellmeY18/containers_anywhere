@@ -13,6 +13,10 @@ const (
 	TypeAutostart   = "autostart"
 	TypePruneImages = "prune-images"
 	TypeLANCheck    = "lan-check"
+	// TypeRecoveryPoint stops the appliance, writes an encrypted whole-appliance copy to a
+	// destination and starts it again. TypeBackupSchedule does that on a timetable.
+	TypeRecoveryPoint  = "recovery-point"
+	TypeBackupSchedule = "backup-schedule"
 
 	PhasePending  = "Pending"
 	PhaseApproved = "Approved"
@@ -56,11 +60,13 @@ type AutostartSpec struct {
 }
 
 type RequestSpec struct {
-	Type      string         `json:"type"`
-	Reason    string         `json:"reason,omitempty"`
-	Resources *ResourcesSpec `json:"resources,omitempty"`
-	Power     *PowerSpec     `json:"power,omitempty"`
-	Autostart *AutostartSpec `json:"autostart,omitempty"`
+	Type           string              `json:"type"`
+	Reason         string              `json:"reason,omitempty"`
+	Resources      *ResourcesSpec      `json:"resources,omitempty"`
+	Power          *PowerSpec          `json:"power,omitempty"`
+	Autostart      *AutostartSpec      `json:"autostart,omitempty"`
+	RecoveryPoint  *RecoveryPointSpec  `json:"recoveryPoint,omitempty"`
+	BackupSchedule *BackupScheduleSpec `json:"backupSchedule,omitempty"`
 }
 
 type RequestStatus struct {
@@ -84,7 +90,7 @@ func (s RequestSpec) Validate() error {
 		return errors.New("invalid reason")
 	}
 	set := 0
-	for _, present := range []bool{s.Resources != nil, s.Power != nil, s.Autostart != nil} {
+	for _, present := range []bool{s.Resources != nil, s.Power != nil, s.Autostart != nil, s.RecoveryPoint != nil, s.BackupSchedule != nil} {
 		if present {
 			set++
 		}
@@ -110,6 +116,21 @@ func (s RequestSpec) Validate() error {
 	case TypeAutostart:
 		if s.Autostart == nil || set != 1 {
 			return errors.New("autostart requests carry exactly the autostart parameters")
+		}
+	case TypeRecoveryPoint:
+		if s.RecoveryPoint == nil || set != 1 || !destinationID.MatchString(s.RecoveryPoint.Destination) {
+			return errors.New("recovery-point requests carry exactly a destination id")
+		}
+	case TypeBackupSchedule:
+		b := s.BackupSchedule
+		if b == nil || set != 1 {
+			return errors.New("backup-schedule requests carry exactly the schedule parameters")
+		}
+		if b.Enabled {
+			if !destinationID.MatchString(b.Destination) || b.EveryHours < MinScheduleHours || b.EveryHours > MaxScheduleHours ||
+				b.KeepLast < 1 || b.KeepLast > MaxKeepLast || b.WindowStartHour < 0 || b.WindowStartHour > 23 || b.WindowHours < 1 || b.WindowHours > 24 {
+				return fmt.Errorf("a schedule needs a destination, everyHours %d-%d, keepLast 1-%d, windowStartHour 0-23 and windowHours 1-24", MinScheduleHours, MaxScheduleHours, MaxKeepLast)
+			}
 		}
 	case TypePruneImages, TypeLANCheck:
 		if set != 0 {

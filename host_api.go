@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -67,12 +68,13 @@ type hostBridge struct {
 	lan      *hostapi.LANCheck
 	lastErr  string
 	dest     destinationChecker
+	started  time.Time
 }
 
 func newHostBridge(state string, m manifest, gw *gateway, client *http.Client) *hostBridge {
 	cpus, mem, _ := vmResourcesFor(state)
 	return &hostBridge{state: state, m: m, cpus: cpus, memoryMiB: mem, gw: gw, client: client,
-		long: &http.Client{Transport: client.Transport, Timeout: 4 * time.Minute}, inflight: map[string]bool{}}
+		long: &http.Client{Transport: client.Transport, Timeout: 4 * time.Minute}, inflight: map[string]bool{}, started: time.Now()}
 }
 
 var applianceTagPattern = regexp.MustCompile(`appliance-v([0-9]+\.[0-9]+\.[0-9]+[^/]*)/`)
@@ -217,12 +219,14 @@ func (b *hostBridge) facts() hostapi.Facts {
 	b.mu.Lock()
 	lan := b.lan
 	b.mu.Unlock()
-	return hostapi.Facts{HostTime: now.Format(time.RFC3339), AppVersion: appVersion, ApplianceVersion: b.m.Version, BundleID: bundleID(b.m),
+	f := hostapi.Facts{HostTime: now.Format(time.RFC3339), AppVersion: appVersion, ApplianceVersion: b.m.Version, BundleID: bundleID(b.m),
 		K3sVersion: b.m.K3s, Arch: b.m.Arch, OS: runtime.GOOS, CPU: cpu, MemoryMiB: mem,
 		StateDirFreeBytes: int64(usage.Free), StateDirTotal: int64(usage.Total), LauncherHealthy: true,
 		Autostart: hostapi.Autostart{Supported: as.Supported, Enabled: as.Enabled, Mechanism: trimTo(as.Mechanism, 100), Note: trimTo(as.Note, 200)},
 		Update:    hostUpdateFact(b.state, b.m.Version), Gateway: gatewayFact(b.state, b.gw, lan),
 		Destinations: b.dest.facts(b.state)}
+	f.RecoveryPoints, f.BackupSchedule, f.RecoveryKit = recoveryFacts(b.state)
+	return f
 }
 
 func (b *hostBridge) guestCall(ctx context.Context, c *http.Client, method, path string, body []byte) ([]byte, error) {
@@ -329,7 +333,7 @@ func (b *hostBridge) process(ctx context.Context, a hostapi.Actionable, approve 
 	defer b.release(a.UID)
 	ctx, cancel := context.WithTimeout(ctx, 6*time.Minute)
 	defer cancel()
-	if a.Phase == hostapi.PhaseApproved && a.Spec.Type == hostapi.TypePower {
+	if a.Phase == hostapi.PhaseApproved && (a.Spec.Type == hostapi.TypePower || a.Spec.Type == hostapi.TypeRecoveryPoint) {
 		b.report(ctx, hostapi.Decision{UID: a.UID, Phase: hostapi.PhaseFailed, Reason: "Interrupted", Message: "The launcher restarted before this was applied; create a new request"})
 		return
 	}
@@ -399,6 +403,27 @@ func (b *hostBridge) apply(ctx context.Context, a hostapi.Actionable) (hostapi.D
 			return failed(a.UID, "AutostartFailed", err), nil
 		}
 		return ok(fmt.Sprintf("Autostart is now %v", a.Spec.Autostart.Enabled), autostartStatus(b.state)), nil
+	case hostapi.TypeRecoveryPoint:
+		p, err := queueRecovery(b.state, a.Spec.RecoveryPoint.Destination, "request")
+		if err != nil {
+			return failed(a.UID, "RecoveryPointRefused", err), nil
+		}
+		return ok("The appliance will stop, write an encrypted recovery point, read it back, and start again. Follow its progress in HostRecoveryPoint "+p.ID+".",
+			map[string]string{"recoveryPoint": p.ID}), func() { triggerPower("restart-appliance") }
+	case hostapi.TypeBackupSchedule:
+		s := *a.Spec.BackupSchedule
+		if s.Enabled {
+			if _, err := findDestination(b.state, s.Destination); err != nil {
+				return failed(a.UID, "UnknownDestination", err), nil
+			}
+		}
+		if err := saveSchedule(b.state, s); err != nil {
+			return failed(a.UID, "WriteFailed", err), nil
+		}
+		if !s.Enabled {
+			return ok("The backup schedule is cancelled", map[string]bool{"enabled": false}), nil
+		}
+		return ok(fmt.Sprintf("Recovery points will be written every %d hours inside the window, keeping the newest %d. Each one stops the appliance for a few minutes.", s.EveryHours, s.KeepLast), s), nil
 	case hostapi.TypePruneImages:
 		raw, err := b.guestCall(ctx, b.long, "POST", "/_agent/host/prune-images", nil)
 		if err != nil {
@@ -486,12 +511,31 @@ func (b *hostBridge) run(ctx context.Context) {
 			b.mu.Unlock()
 		}
 		cancel()
+		b.startScheduledRecovery()
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(5 * time.Second):
 		}
 	}
+}
+
+// startScheduledRecovery starts a scheduled recovery point when one is due. The person
+// consented to the downtime when they approved the schedule; it only runs inside its
+// window, never in the first minutes after the cluster starts, and backs off after a failure.
+func (b *hostBridge) startScheduledRecovery() {
+	if time.Since(b.started) < 10*time.Minute {
+		return
+	}
+	dest, ok := scheduleDue(b.state, time.Now())
+	if !ok {
+		return
+	}
+	if _, err := queueRecovery(b.state, dest, "schedule"); err != nil {
+		log.Printf("scheduled recovery point not started: %v", err)
+		return
+	}
+	triggerPower("restart-appliance")
 }
 
 // runRequests is the headless way to see and decide host requests, for a launcher

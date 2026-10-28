@@ -150,6 +150,53 @@ func backup(state, file string) error {
 	if file == "" {
 		return errors.New("--file is required; stop the cluster before backup")
 	}
+	if e := outsideState(state, file); e != nil {
+		return e
+	}
+	id, e := age.GenerateX25519Identity()
+	if e != nil {
+		return e
+	}
+	// A recovery key is never silently overwritten or placed inside cluster state.
+	keyPath := file + ".key"
+	key, e := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if e != nil {
+		return e
+	}
+	_, e = key.WriteString(id.String() + "\n")
+	if e == nil {
+		e = key.Sync()
+	}
+	e = errors.Join(e, key.Close())
+	if e != nil {
+		return e
+	}
+	if e = createBackup(state, file, id.Recipient()); e != nil {
+		os.Remove(keyPath) // a key for a backup that does not exist is only clutter
+		return e
+	}
+	fmt.Printf("Backup: %s\nRecovery key: %s\nMove the recovery key to a separate safe location.\n", file, keyPath)
+	return nil
+}
+
+func outsideState(state, file string) error {
+	abs, e := filepath.Abs(file)
+	if e != nil {
+		return e
+	}
+	rel, e := filepath.Rel(state, abs)
+	if e != nil {
+		return e
+	}
+	if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return errors.New("save backups outside cluster state")
+	}
+	return nil
+}
+
+// createBackup writes one encrypted copy of a stopped cluster's state to file, which must not
+// exist. It holds the state lock, so it cannot run while the appliance is.
+func createBackup(state, file string, recipient age.Recipient) error {
 	unlock, e := lockState(state)
 	if e != nil {
 		return e
@@ -169,38 +216,9 @@ func backup(state, file string) error {
 	} else if !os.IsNotExist(e) {
 		return e
 	}
-	id, e := age.GenerateX25519Identity()
 	names, memberErr := backupMembers(state)
 	if memberErr != nil {
 		return memberErr
-	}
-	if e != nil {
-		return e
-	}
-	// A recovery key is never silently overwritten or placed inside cluster state.
-	abs, e := filepath.Abs(file)
-	if e != nil {
-		return e
-	}
-	rel, e := filepath.Rel(state, abs)
-	if e != nil {
-		return e
-	}
-	if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return errors.New("save backups outside cluster state")
-	}
-	keyPath := file + ".key"
-	key, e := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if e != nil {
-		return e
-	}
-	_, e = key.WriteString(id.String() + "\n")
-	if e == nil {
-		e = key.Sync()
-	}
-	e = errors.Join(e, key.Close())
-	if e != nil {
-		return e
 	}
 	out, e := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if e != nil {
@@ -213,11 +231,14 @@ func backup(state, file string) error {
 			os.Remove(file)
 		}
 	}()
-	encrypted, e := age.Encrypt(out, id.Recipient())
+	encrypted, e := age.Encrypt(out, recipient)
 	if e != nil {
 		return e
 	}
-	gz := gzip.NewWriter(encrypted)
+	gz, e := gzip.NewWriterLevel(encrypted, gzip.BestSpeed) // the disk is mostly zeros, which compress at any level
+	if e != nil {
+		return e
+	}
 	tw := tar.NewWriter(gz)
 	for _, name := range names {
 		info, e := os.Lstat(filepath.Join(state, filepath.FromSlash(name)))
@@ -249,7 +270,6 @@ func backup(state, file string) error {
 		return e
 	}
 	ok = true
-	fmt.Printf("Backup: %s\nRecovery key: %s\nMove the recovery key to a separate safe location.\n", file, keyPath)
 	return nil
 }
 func restore(state, file, keyPath string) error {

@@ -64,6 +64,8 @@ Private keys are never exposed.
 | `power` | `action`: `shutdown` or `restart-appliance` | Recorded as Applied **before** it acts, then runs. Never replayed after a launcher restart. |
 | `autostart` | `enabled` | Installs or removes the per-user launch entry. |
 | `prune-images` | none | `crictl rmi --prune` in the guest: unreferenced images only, never volumes. Reports bytes reclaimed. |
+| `recovery-point` | `destination`: the id of an enrolled `HostDestination` | Stops the appliance, writes an **encrypted whole-appliance copy** to the destination, reads it back, and starts the appliance again (a few minutes of downtime). Needs approval. Recorded as Applied **before** it acts and never replayed. Progress is in the read-only `HostRecoveryPoint` named in `status.result`. |
+| `backup-schedule` | `enabled`; with it `destination`, `everyHours` 6–720, `keepLast` 1–30, `windowStartHour` 0–23, `windowHours` 1–24 | Cold recovery points on a timetable. **Approving it is the consent for the downtime**, which only happens inside the window (the launcher computer's local time), never in the first ten minutes after a start, and backs off for an hour after a failure. Retention removes only points the schedule made. `enabled: false` cancels it. |
 | `lan-check` | none | Needs no approval. Dials this computer's own LAN addresses on the HTTPS port. **Not proof that other devices can reach it.** |
 
 Phases: `Pending` → `Approved` → `Applied` or `Failed`; or `Rejected`, or `Expired` after
@@ -71,6 +73,21 @@ Phases: `Pending` → `Approved` → `Applied` or `Failed`; or `Rejected`, or `E
 (admission policy), so what a person approved is exactly what is applied. A decision
 lands only on the object with the same `uid` that the launcher saw. Status is written
 only by the bridge. Grant `containers-host-requester` in the requester's namespace.
+
+### `HostDestination` (cluster-scoped, read-only)
+
+A place the launcher can write backups to, enrolled by a person in the launcher panel (or `destinations --operation add --name ... --path ...`). No workload can enrol, change or remove one, and **no host path is ever published**.
+`status`: `name`, `kind` (`folder`), `available`, `freeBytes`, `totalBytes`, `sameDeviceAsData`, `checkedAt`, `lastError`, and an `Available` condition.
+A destination on the same disk as the cluster's data reports `sameDeviceAsData: true`: a copy there is **not disaster recovery**. A missing removable disk is `available: false`, and a different disk mounted at the same place is refused.
+Un-enrolling never touches the files in the folder. There is no S3 endpoint yet.
+
+### `HostRecoveryPoint` (cluster-scoped, read-only)
+
+One whole-appliance copy. `status`: `destination`, `trigger` (`request` or `schedule`), `phase` (`Running`, `Complete`, `Failed`), `consistency` (always `stopped`: the appliance was shut down first), `startedAt`, `finishedAt`, `sizeBytes`, `sha256`, `verified`, `error`.
+A point is `verified` only after it was decrypted and read back completely, and is published under its final name only then. **This is not point-in-time recovery of any application.** Interrupted writes are reported `Failed` and leave no partial file.
+Points are encrypted with a key that lives in the launcher's state directory, never in the cluster or the destination. `HostStatus.status.host.recoveryKit` says whether the key exists and whether the person confirmed saving a copy elsewhere (**without one, a lost computer means unrestorable points**). Showing the key is launcher-only.
+`HostStatus.status.host.backupSchedule` reports `lastSuccess`, `lastAttempt`, `nextDue` and `objectiveBreached` (the newest verified point is older than the interval plus a grace period, for example because the destination was offline).
+Limits today: the data disk is sparse but a copy writes its full apparent size through fast compression, so a 100 GiB disk takes minutes (sparse-aware backup is tracked separately); restoring is the existing `restore` command into an empty state directory, with the key.
 
 ### `HostRegistryTrust` (cluster-scoped; administrator-created)
 
