@@ -216,10 +216,10 @@ jobs:
           if [ -f dist/releases/runtime-linux-amd64.tar.gz ]; then
             tar -xzf dist/releases/runtime-linux-amd64.tar.gz -C dist/acceptance/qemu
           fi
-      # The full lifecycle is expensive, so it runs on demand (e2e) and always when
-      # booting the published bytes of a release (app.yml), which is the prod gate.
+      # The full lifecycle is expensive, so it runs only on demand (e2e), for appliance and
+      # app builds alike, until the project declares stability.
       - name: Linux KVM lifecycle acceptance (install, app replacement, backup/restore, root swap and fallback)
-        if: matrix.platform == 'linux' && matrix.arch == 'amd64' && !(inputs.reuse_appliance && inputs.candidate_artifacts) && (inputs.e2e || (inputs.reuse_appliance && !inputs.candidate_artifacts))
+        if: matrix.platform == 'linux' && matrix.arch == 'amd64' && !(inputs.reuse_appliance && inputs.candidate_artifacts) && inputs.e2e
         shell: bash
         env:
           PUBLIC_DEPENDENCIES: ${{ inputs.reuse_appliance && !inputs.candidate_artifacts }}

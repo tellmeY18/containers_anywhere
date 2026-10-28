@@ -58,7 +58,10 @@ in ROADMAP.md. Planned recovery features must not be described as implemented.
   over half of the slowest job). Every run still builds, packages and boots the
   appliance once until healthy. Run `appliance.yml -f e2e=true` (add `-f extended=true`
   for the wider checks) before anything production-bound, and state in the release notes
-  whether it ran. `app.yml` always boots the published bytes of a release.
+  whether it ran. `app.yml` takes the same `e2e` and `extended` inputs and is equally light by
+  default. The user has asked for fast shipping while ideas are still being tried: do not turn
+  e2e on without being asked, and do not add coverage to the default path. Solid end-to-end
+  coverage comes after the user declares stability.
 - Release builds, compilation tests and packaging run in GitHub Actions.
   Format with gofmt; run go vet and go test -race in CI. Changes to lifecycle or
   storage also require the real smoke test with reboot and backup/restore.
