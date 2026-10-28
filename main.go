@@ -75,10 +75,12 @@ func run() error {
 	file := fs.String("file", "", "encrypted backup file")
 	key := fs.String("key", "", "recovery identity file")
 	noOpen := fs.Bool("no-open", false, "do not open a browser")
-	operation := fs.String("operation", "status", "operation: update (prepare, activate, commit, cancel, recover, swap, status), requests (list, approve, reject), autostart (enable, disable, status)")
+	operation := fs.String("operation", "status", "operation: update (prepare, activate, commit, cancel, recover, swap, status), requests (list, approve, reject), destinations (list, add, remove), autostart (enable, disable, status)")
 	originalBundle := fs.String("original-bundle", "", "exact selected bundle for update recovery (default: verified cache)")
 	destination := fs.String("destination", "", "new empty recovery destination")
-	requestID := fs.String("id", "", "host request UID for requests approve/reject")
+	requestID := fs.String("id", "", "host request UID for requests approve/reject, or destination id for destinations remove")
+	destName := fs.String("name", "", "destination name for destinations add")
+	destPath := fs.String("path", "", "destination folder for destinations add")
 	acceptEffects := fs.Bool("accept-external-effects", false, "acknowledge candidate workloads can make irreversible external writes; no automatic rollback")
 	acceptValidation := fs.Bool("accept-workload-validation", false, "attest workload/PVC contents and credentials were validated through the candidate")
 	acceptLoss := fs.Bool("accept-data-loss", false, "acknowledge cold recovery loses later writes and requires external side-effect reconciliation")
@@ -102,6 +104,8 @@ func run() error {
 		return restore(*state, *file, *key)
 	case "requests":
 		return runRequests(*state, *operation, *requestID)
+	case "destinations":
+		return runDestinations(*state, *operation, *requestID, *destName, *destPath)
 	case "autostart":
 		return runAutostart(*state, *operation)
 	case "update":
@@ -141,7 +145,7 @@ func run() error {
 		}
 		return err
 	default:
-		return errors.New("commands: desktop, serve, doctor, status, stop, logs, backup, restore, update, requests, autostart, gateway-configure, gateway-status, demo-check")
+		return errors.New("commands: desktop, serve, doctor, status, stop, logs, backup, restore, update, requests, destinations, autostart, gateway-configure, gateway-status, demo-check")
 	}
 }
 

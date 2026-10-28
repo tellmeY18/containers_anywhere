@@ -148,6 +148,7 @@ func (g *guestHostAPI) run(ctx context.Context) {
 		g.SetCRDsMissing(crdsMissing(err))
 		if err == nil {
 			logOnce("requests", g.ReconcileRequests(step))
+			logOnce("destinations", g.ReconcileDestinations(step))
 			logOnce("registry trust", g.ReconcileRegistryTrust(step, certsDir, registryStateFile, localAddresses()))
 		} else if !crdsMissing(err) {
 			logOnce("status", err)

@@ -28,6 +28,10 @@ type Controller struct {
 	written    bool
 	lastError  string
 	crdMissing bool
+
+	destWritten bool
+	destKey     string
+	destWrite   time.Time
 }
 
 func (c *Controller) now() time.Time {

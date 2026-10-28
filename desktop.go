@@ -305,6 +305,11 @@ func desktop(state, bundle string) error {
 			io.WriteString(w, `{"pending":[]}`)
 			return
 		}
+		if r.Method == "GET" && r.URL.Path == "/destinations" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"destinations": describeDestinations(state)})
+			return
+		}
 		if r.Method == "GET" && r.URL.Path == "/logs" {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			for _, name := range []string{"launcher.log", "console.log", "gateway.log"} {
@@ -463,6 +468,20 @@ func desktop(state, bundle string) error {
 			if err == nil {
 				_, err = controlCall(cc, "POST", "/control/host/requests/"+body.UID+"/"+strings.TrimPrefix(r.URL.Path, "/host/"), nil, 30*time.Second)
 			}
+		case "/destinations/add", "/destinations/remove":
+			// Enrolling a destination is a launcher-only act, like approving a request.
+			var body struct {
+				ID, Name, Path string
+			}
+			if json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body) != nil {
+				err = errors.New("invalid request")
+				break
+			}
+			if r.URL.Path == "/destinations/add" {
+				_, err = addDestination(state, body.Name, body.Path)
+			} else {
+				err = removeDestination(state, body.ID)
+			}
 		case "/store/install":
 			var body struct {
 				Repo   string `json:"repo"`
@@ -553,6 +572,7 @@ const desktopHTML = `<!doctype html><html lang="en"><meta charset="utf-8"><meta 
 <p id="gateway-status" role="status"></p>
 <div id="workloads"></div>
 <h2>Requests</h2><div id="requests" role="status"></div>
+<h2>Backup destinations</h2><p><small>Folders or disks that backups can be written to. A destination on the same disk as your data is not disaster recovery.</small></p><div id="destinations" role="status"></div><p><input id="dest-name" placeholder="Name, for example Backup disk" maxlength="80"> <input id="dest-path" placeholder="Folder, for example /Volumes/Backup" size="34"> <button id="dest-add">Add destination</button></p>
 <h2>Store</h2><p><small>Community deployments found on GitHub (topic containers-anywhere). Nothing here is verified: installing one runs its publisher's code on your cluster.</small></p><div id="store" role="status"></div><button id="store-refresh">Refresh list</button>
 <details><summary>Advanced updates (makes a safety copy of your data first)</summary>
 <p id="update-status" role="status"></p>
@@ -575,6 +595,9 @@ function storeLine(box,text,small){let p=document.createElement(small?'small':'p
 async function installEntry(e){try{let r=JSON.parse(await call('store/review?repo='+encodeURIComponent(e.repo)));let lines=['Install '+r.repo+' (UNVERIFIED)?','','Risk: '+r.risk,'Resources: '+r.summary.kinds.join(', '),'Namespaces: '+(r.summary.namespaces.join(', ')||'none'),'Images: '+(r.summary.images.join(', ')||'none')];for(let k of r.summary.risks)lines.push((k.level==='high'?'HIGH: ':'Note: ')+k.text);lines.push('','Manifest: '+r.manifestURL,'SHA-256: '+r.sha256,'','Installing gives its publisher the access above. Read the manifest first.');if(!confirm(lines.join('\n')))return;if(r.risk==='high'&&prompt('This is high risk. Type the repository name to continue: '+r.repo)!==r.repo)return;await call('store/install','POST',{repo:r.repo,sha256:r.sha256});document.getElementById('output').textContent='Installed '+r.repo+'. It may take a few minutes to start; follow it in Kite.';loadStore()}catch(x){document.getElementById('output').textContent=x.message}}
 async function loadStore(){try{let d=JSON.parse(await call('store'));let box=document.getElementById('store');box.replaceChildren();let have={};for(let i of d.installed)have[i.repo]=i;let list=d.catalog.entries;if(!list.length)storeLine(box,d.loading?'Looking for deployments on GitHub…':(d.catalog.error||'No deployments found yet.'));else if(d.catalog.error)storeLine(box,d.catalog.error,true);for(let e of list){let row=document.createElement('p');let b=document.createElement('strong');b.textContent=e.repo;row.appendChild(b);row.appendChild(document.createElement('br'));let t=document.createElement('small');t.textContent=(e.description||'No description')+' | unverified | risk: '+e.risk+(e.stars?' | '+e.stars+' stars':'')+(e.archived?' | archived':'')+(e.fork?' | fork':'');row.appendChild(t);row.appendChild(document.createElement('br'));if(have[e.repo]){let s=document.createElement('small');s.textContent='Installed '+have[e.repo].installedAt;row.appendChild(s)}else if(e.risk==='blocked'){let s=document.createElement('small');s.textContent='Cannot be installed: '+(e.summary.blocked[0]||'blocked');row.appendChild(s)}else{let bt=document.createElement('button');bt.textContent='Review and install';bt.onclick=()=>installEntry(e);row.appendChild(bt)}box.appendChild(row)}}catch(x){document.getElementById('store').textContent=x.message}}
 document.getElementById('store-refresh').onclick=async()=>{try{await call('store/refresh','POST');setTimeout(loadStore,1500)}catch(x){document.getElementById('output').textContent=x.message}};
+async function loadDestinations(){try{let d=JSON.parse(await call('destinations'));let box=document.getElementById('destinations');box.replaceChildren();let list=d.destinations||[];if(!list.length){box.textContent='No destinations yet.';return}for(let x of list){let row=document.createElement('p');let n=document.createElement('strong');n.textContent=x.name;let free=x.available?(Math.round(x.freeBytes/1073741824*10)/10)+' GiB free':'unavailable: '+x.lastError;row.append(n,' ('+x.path+') ',free);if(x.sameDeviceAsData){let w=document.createElement('small');w.textContent=' Same disk as your data: not disaster recovery.';row.append(w)}let b=document.createElement('button');b.textContent='Remove';b.onclick=async()=>{if(!confirm('Stop using this destination? Files already in the folder are not deleted.'))return;try{await call('destinations/remove','POST',{id:x.id})}catch(e){document.getElementById('output').textContent=e.message}loadDestinations()};row.append(' ',b);box.append(row)}}catch(e){}}
+document.getElementById('dest-add').onclick=async()=>{try{await call('destinations/add','POST',{name:document.getElementById('dest-name').value,path:document.getElementById('dest-path').value});document.getElementById('dest-name').value='';document.getElementById('dest-path').value=''}catch(e){document.getElementById('output').textContent=e.message}loadDestinations()};
+setInterval(loadDestinations,15000);loadDestinations();
 setInterval(loadRequests,4000);loadRequests();setInterval(loadStore,15000);loadStore();</script></html>`
 
 // applianceInfo says whether this app recommends a different appliance than the

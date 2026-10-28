@@ -87,6 +87,8 @@ type Facts struct {
 	Autostart         Autostart `json:"autostart"`
 	Update            Update    `json:"update"`
 	Gateway           Gateway   `json:"gateway"`
+	// Destinations are the backup destinations enrolled in the launcher (see HostDestination).
+	Destinations []Destination `json:"destinations,omitempty"`
 }
 
 type Disk struct {

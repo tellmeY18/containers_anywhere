@@ -25,6 +25,9 @@ func (f Facts) Validate() error {
 	if _, err := time.Parse(time.RFC3339, f.HostTime); err != nil {
 		return errors.New("hostTime must be RFC 3339")
 	}
+	if err := validateDestinations(f.Destinations); err != nil {
+		return err
+	}
 	if len(f.Update.RetainedRecoveryPoints) > 32 || len(f.Gateway.BoundAddresses) > 32 {
 		return errors.New("too many list entries")
 	}
@@ -124,6 +127,7 @@ func (s Status) MaterialKey() string {
 	if c.Host != nil {
 		h := *c.Host
 		h.HostTime = ""
+		h.Destinations = nil
 		c.Host = &h
 	}
 	b, _ := json.Marshal(c)

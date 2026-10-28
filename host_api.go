@@ -66,6 +66,7 @@ type hostBridge struct {
 	inflight map[string]bool
 	lan      *hostapi.LANCheck
 	lastErr  string
+	dest     destinationChecker
 }
 
 func newHostBridge(state string, m manifest, gw *gateway, client *http.Client) *hostBridge {
@@ -220,7 +221,8 @@ func (b *hostBridge) facts() hostapi.Facts {
 		K3sVersion: b.m.K3s, Arch: b.m.Arch, OS: runtime.GOOS, CPU: cpu, MemoryMiB: mem,
 		StateDirFreeBytes: int64(usage.Free), StateDirTotal: int64(usage.Total), LauncherHealthy: true,
 		Autostart: hostapi.Autostart{Supported: as.Supported, Enabled: as.Enabled, Mechanism: trimTo(as.Mechanism, 100), Note: trimTo(as.Note, 200)},
-		Update:    hostUpdateFact(b.state, b.m.Version), Gateway: gatewayFact(b.state, b.gw, lan)}
+		Update:    hostUpdateFact(b.state, b.m.Version), Gateway: gatewayFact(b.state, b.gw, lan),
+		Destinations: b.dest.facts(b.state)}
 }
 
 func (b *hostBridge) guestCall(ctx context.Context, c *http.Client, method, path string, body []byte) ([]byte, error) {
