@@ -84,3 +84,16 @@ guest enlarges the filesystem when it mounts it. It never shrinks.
 - Postgres and SQLite performance under copy-on-write has not been measured.
 - Per-volume size limits (qgroups) are not enforced.
 - Boot has been proven on Linux/KVM only (when CI ran it); macOS and Windows are unproven.
+
+## Decisions
+
+- **Our own provisioner, no CSI.** Volumes are direct subvolumes provisioned by the guest agent. We
+  evaluated [btrfs-nfs-csi](https://github.com/erikmagkekse/btrfs-nfs-csi) (Apache-2.0, beta, moving to a
+  fork called ButterStore). It mounts volumes only over NFS, which a single node does not need, and it
+  brings an agent, a CSI controller and node driver, about nine pinned images, and a heavy dependency
+  tree. We use it as a **reference only**: qgroup quotas (simple quotas on kernel 6.7+), online expansion
+  and compression handling are the ideas to borrow, with its attribution kept in THIRD_PARTY_NOTICES.md if
+  any code is copied. Revisit if it gains a direct-mount backend.
+- **Own CRDs before the standard VolumeSnapshot API.** The standard API needs a CSI driver; revisit it if
+  volume-snapshot backups (for example CNPG's) become a requirement.
+- **Per-volume size limits are not enforced yet.**
