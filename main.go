@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/tellmeY18/containers_anywhere/internal/protocol"
 	"io"
 	"log"
 	"net"
@@ -75,10 +76,10 @@ func run() error {
 	file := fs.String("file", "", "encrypted backup file")
 	key := fs.String("key", "", "recovery identity file")
 	noOpen := fs.Bool("no-open", false, "do not open a browser")
-	operation := fs.String("operation", "status", "operation: update (prepare, activate, commit, cancel, recover, swap, status), requests (list, approve, reject), destinations (list, add, remove), autostart (enable, disable, status)")
+	operation := fs.String("operation", "status", "operation: update (prepare, activate, commit, cancel, recover, swap, status), requests (list, approve, reject), destinations (list, add, remove), restore-point (list, restore), autostart (enable, disable, status)")
 	originalBundle := fs.String("original-bundle", "", "exact selected bundle for update recovery (default: verified cache)")
 	destination := fs.String("destination", "", "new empty recovery destination")
-	requestID := fs.String("id", "", "host request UID for requests approve/reject, or destination id for destinations remove")
+	requestID := fs.String("id", "", "host request UID for requests approve/reject, destination id for destinations remove, or restore point id for restore-point restore")
 	destName := fs.String("name", "", "destination name for destinations add")
 	destPath := fs.String("path", "", "destination folder for destinations add")
 	acceptEffects := fs.Bool("accept-external-effects", false, "acknowledge candidate workloads can make irreversible external writes; no automatic rollback")
@@ -104,6 +105,8 @@ func run() error {
 		return restore(*state, *file, *key)
 	case "requests":
 		return runRequests(*state, *operation, *requestID)
+	case "restore-point":
+		return runRestorePoint(*state, *operation, *requestID, *acceptLoss)
 	case "destinations":
 		return runDestinations(*state, *operation, *requestID, *destName, *destPath)
 	case "autostart":
@@ -145,7 +148,7 @@ func run() error {
 		}
 		return err
 	default:
-		return errors.New("commands: desktop, serve, doctor, status, stop, logs, backup, restore, update, requests, destinations, autostart, gateway-configure, gateway-status, demo-check")
+		return errors.New("commands: desktop, serve, doctor, status, stop, logs, backup, restore, update, requests, destinations, restore-point, autostart, gateway-configure, gateway-status, demo-check")
 	}
 }
 
@@ -371,6 +374,38 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 				return
 			}
 			io.WriteString(w, "ok\n")
+			return
+		}
+		if name == "restore-points" || name == "restore-points/restore" {
+			if !protocol.Has(m.Capabilities, "system-restore-v1") {
+				http.Error(w, "This appliance predates system restore; update the appliance to use it.", http.StatusNotFound)
+				return
+			}
+			if name == "restore-points" && r.Method == "GET" {
+				out, err := guestRestoreCall(r.Context(), client, "GET", "/_agent/storage/restore-points", nil)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadGateway)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(out)
+				return
+			}
+			if name == "restore-points/restore" && r.Method == "POST" {
+				body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
+				if err == nil {
+					_, err = guestRestoreCall(r.Context(), client, "POST", "/_agent/storage/restore", body)
+				}
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusConflict)
+					return
+				}
+				// The restore runs before the cluster starts: restart the appliance now.
+				triggerPower("restart-appliance")
+				io.WriteString(w, "The appliance is restarting to restore; the previous state is kept as a restore point.\n")
+				return
+			}
+			http.NotFound(w, r)
 			return
 		}
 		if strings.HasPrefix(name, "host") && bridge == nil {

@@ -38,7 +38,7 @@ func TestOptionalAndRequiredDoNotOverlap(t *testing.T) {
 			t.Fatalf("%s is both required and optional", o)
 		}
 	}
-	if !Has(Capabilities(), "host-api-v1") || Has(published020, "host-api-v1") || !Has(Capabilities(), "storage-v1") {
+	if !Has(Capabilities(), "host-api-v1") || Has(published020, "host-api-v1") || !Has(Capabilities(), "storage-v1") || !Has(Capabilities(), "system-restore-v1") {
 		t.Fatal("host-api-v1 is optional and was added after 0.2.0")
 	}
 }

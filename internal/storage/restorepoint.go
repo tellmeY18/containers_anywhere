@@ -20,6 +20,7 @@ type bootRecord struct {
 }
 
 type restorePointMeta struct {
+	Label     string   `json:"label,omitempty"`
 	From      string   `json:"from"`
 	To        string   `json:"to"`
 	CreatedAt string   `json:"createdAt"`
@@ -33,7 +34,9 @@ type RestorePointConfig struct {
 	VarLib, SnapshotsDir, PoolDir string
 	Version                       string
 	Keep                          int
-	Now                           func() time.Time
+	// Protect names a restore point that pruning must not remove (the one being restored from).
+	Protect string
+	Now     func() time.Time
 }
 
 // TakeRestorePointOnChange snapshots the system subvolume and every volume the first
@@ -74,15 +77,20 @@ func TakeRestorePointOnChange(ctx context.Context, fs FS, cfg RestorePointConfig
 }
 
 func takeRestorePoint(ctx context.Context, fs FS, cfg RestorePointConfig, from string) (string, error) {
+	return takeLabelledRestorePoint(ctx, fs, cfg, from, from)
+}
+
+// takeLabelledRestorePoint records the state left by version "from", named after label.
+func takeLabelledRestorePoint(ctx context.Context, fs FS, cfg RestorePointConfig, from, label string) (string, error) {
 	if _, err := os.Stat(cfg.SnapshotsDir); err != nil {
 		return "", fmt.Errorf("snapshots are not available: %w", err)
 	}
 	stamp := cfg.Now().UTC().Format("20060102T150405Z")
-	dir := filepath.Join(cfg.SnapshotsDir, "restore-"+stamp+"-from-"+safeVersion.ReplaceAllString(from, "_"))
+	dir := filepath.Join(cfg.SnapshotsDir, "restore-"+stamp+"-from-"+safeVersion.ReplaceAllString(label, "_"))
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		return "", err
 	}
-	meta := restorePointMeta{From: from, To: cfg.Version, CreatedAt: cfg.Now().UTC().Format(time.RFC3339)}
+	meta := restorePointMeta{Label: label, From: from, To: cfg.Version, CreatedAt: cfg.Now().UTC().Format(time.RFC3339)}
 	if err := fs.Snapshot(ctx, cfg.VarLib, filepath.Join(dir, "system"), true); err != nil {
 		return dir, err
 	}
@@ -122,6 +130,9 @@ func pruneRestorePoints(ctx context.Context, fs FS, cfg RestorePointConfig) erro
 	sort.Strings(points) // the timestamp makes name order chronological
 	var firstErr error
 	for i := 0; i < len(points)-cfg.Keep; i++ {
+		if points[i] == cfg.Protect {
+			continue
+		}
 		dir := filepath.Join(cfg.SnapshotsDir, points[i])
 		subs, _ := os.ReadDir(dir)
 		for _, s := range subs {

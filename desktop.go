@@ -306,6 +306,19 @@ func desktop(state, bundle string) error {
 			io.WriteString(w, `{"pending":[]}`)
 			return
 		}
+		if r.Method == "GET" && r.URL.Path == "/restore-points" {
+			w.Header().Set("Content-Type", "application/json")
+			cc, err := readControl(state)
+			if err == nil {
+				var b []byte
+				if b, err = controlCall(cc, "GET", "/control/restore-points", nil, 10*time.Second); err == nil {
+					w.Write(b)
+					return
+				}
+			}
+			io.WriteString(w, `{"points":[]}`)
+			return
+		}
 		if r.Method == "GET" && r.URL.Path == "/recovery" {
 			w.Header().Set("Content-Type", "application/json")
 			points, sched, kit := recoveryFacts(state)
@@ -475,6 +488,20 @@ func desktop(state, bundle string) error {
 			if err == nil {
 				_, err = controlCall(cc, "POST", "/control/host/requests/"+body.UID+"/"+strings.TrimPrefix(r.URL.Path, "/host/"), nil, 30*time.Second)
 			}
+		case "/restore-points/restore":
+			// A system restore is launcher-only, like approving a request.
+			var body struct {
+				ID string `json:"id"`
+			}
+			if json.NewDecoder(io.LimitReader(r.Body, 1024)).Decode(&body) != nil || body.ID == "" {
+				err = errors.New("invalid request")
+				break
+			}
+			var cc control
+			cc, err = readControl(state)
+			if err == nil {
+				_, err = controlCall(cc, "POST", "/control/restore-points/restore", []byte(fmt.Sprintf(`{"id":%q}`, body.ID)), 60*time.Second)
+			}
 		case "/recovery/key":
 			// Exporting the key is launcher-only: it is shown here and nowhere in the cluster.
 			var id *age.X25519Identity
@@ -588,6 +615,7 @@ const desktopHTML = `<!doctype html><html lang="en"><meta charset="utf-8"><meta 
 <p id="gateway-status" role="status"></p>
 <div id="workloads"></div>
 <h2>Requests</h2><div id="requests" role="status"></div>
+<h2>System restore points</h2><p><small>Taken automatically the first time a new appliance version starts. A restore returns the whole appliance (cluster, volumes, everything installed) to that moment and discards what was written since; the current state is kept as a restore point first. Only points from the appliance now running can be restored.</small></p><div id="restorepoints" role="status"></div>
 <h2>Backup destinations</h2><p><small>Folders or disks that backups can be written to. A destination on the same disk as your data is not disaster recovery.</small></p><div id="destinations" role="status"></div><p><input id="dest-name" placeholder="Name, for example Backup disk" maxlength="80"> <input id="dest-path" placeholder="Folder, for example /Volumes/Backup" size="34"> <button id="dest-add">Add destination</button></p>
 <h2>Recovery points</h2><p><small>Whole-appliance copies, encrypted before they reach a destination. Each one stops the appliance for a few minutes. This is not point-in-time recovery of any application.</small></p><div id="recovery" role="status"></div><p><button id="key-show">Show recovery key</button> <button id="key-saved">I saved the key somewhere else</button></p><pre id="key-box" hidden></pre>
 <h2>Store</h2><p><small>Community deployments found on GitHub (topic containers-anywhere). Nothing here is verified: installing one runs its publisher's code on your cluster.</small></p><div id="store" role="status"></div><button id="store-refresh">Refresh list</button>
@@ -614,6 +642,8 @@ async function loadStore(){try{let d=JSON.parse(await call('store'));let box=doc
 document.getElementById('store-refresh').onclick=async()=>{try{await call('store/refresh','POST');setTimeout(loadStore,1500)}catch(x){document.getElementById('output').textContent=x.message}};
 async function loadDestinations(){try{let d=JSON.parse(await call('destinations'));let box=document.getElementById('destinations');box.replaceChildren();let list=d.destinations||[];if(!list.length){box.textContent='No destinations yet.';return}for(let x of list){let row=document.createElement('p');let n=document.createElement('strong');n.textContent=x.name;let free=x.available?(Math.round(x.freeBytes/1073741824*10)/10)+' GiB free':'unavailable: '+x.lastError;row.append(n,' ('+x.path+') ',free);if(x.sameDeviceAsData){let w=document.createElement('small');w.textContent=' Same disk as your data: not disaster recovery.';row.append(w)}let b=document.createElement('button');b.textContent='Remove';b.onclick=async()=>{if(!confirm('Stop using this destination? Files already in the folder are not deleted.'))return;try{await call('destinations/remove','POST',{id:x.id})}catch(e){document.getElementById('output').textContent=e.message}loadDestinations()};row.append(' ',b);box.append(row)}}catch(e){}}
 document.getElementById('dest-add').onclick=async()=>{try{await call('destinations/add','POST',{name:document.getElementById('dest-name').value,path:document.getElementById('dest-path').value});document.getElementById('dest-name').value='';document.getElementById('dest-path').value=''}catch(e){document.getElementById('output').textContent=e.message}loadDestinations()};
+async function loadRestorePoints(){try{let d=JSON.parse(await call('restore-points'));let box=document.getElementById('restorepoints');box.replaceChildren();if(d.pending){let p=document.createElement('p');p.textContent='A restore is waiting for the next start: '+d.pending;box.append(p)}if(d.last&&d.last.id){let p=document.createElement('p');p.textContent='Last restore: '+d.last.id+(d.last.ok?' completed':' did not complete: '+(d.last.error||''));box.append(p)}let list=d.points||[];if(!list.length){box.append('No restore points yet.');return}for(let x of list){let row=document.createElement('p');row.append(x.createdAt+'  taken under appliance '+x.from+(x.label==='before-restore'?' (kept before a restore)':'')+', '+(x.volumes||[]).length+' volume(s) ');if(x.restorable){let b=document.createElement('button');b.textContent='Restore';b.onclick=async()=>{if(!confirm('Restore the whole appliance to '+x.createdAt+'?\n\nEverything written since is discarded (it is kept as a restore point). The appliance restarts now.'))return;try{await call('restore-points/restore','POST',{id:x.id})}catch(e){document.getElementById('output').textContent=e.message}loadRestorePoints()};row.append(b)}else{let s=document.createElement('small');s.textContent=x.reason||'';row.append(s)}box.append(row)}}catch(e){}}
+setInterval(loadRestorePoints,15000);loadRestorePoints();
 async function loadRecovery(){try{let d=JSON.parse(await call('recovery'));let box=document.getElementById('recovery');box.replaceChildren();let s=d.schedule;if(s&&s.enabled){let p=document.createElement('p');p.textContent='Schedule: every '+s.everyHours+' h to '+s.destination+', keeping '+s.keepLast+(s.objectiveBreached?'. BEHIND: '+s.note:'. Next due '+s.nextDue);box.append(p)}if(d.kit&&d.kit.note){let p=document.createElement('p');p.textContent=d.kit.note;box.append(p)}let list=(d.points||[]).slice().reverse().slice(0,8);if(!list.length&&!(s&&s.enabled)){box.append('No recovery points yet.');return}for(let x of list){let p=document.createElement('p');p.textContent=x.startedAt+'  '+x.destination+'  '+x.phase+(x.verified?' (verified)':'')+(x.error?': '+x.error:'');box.append(p)}}catch(e){}}
 document.getElementById('key-show').onclick=async()=>{try{let k=await call('recovery/key','POST',{});let b=document.getElementById('key-box');b.textContent=k;b.hidden=false}catch(e){document.getElementById('output').textContent=e.message}};
 document.getElementById('key-saved').onclick=async()=>{try{await call('recovery/key-saved','POST',{});document.getElementById('key-box').hidden=true;document.getElementById('key-box').textContent=''}catch(e){document.getElementById('output').textContent=e.message}loadRecovery()};

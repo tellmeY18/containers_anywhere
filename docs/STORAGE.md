@@ -68,8 +68,30 @@ backups (see docs/DISASTER_RECOVERY.md). Snapshots and volumes share the disk's 
 
 The first time a different appliance version boots on a disk, before the cluster starts, the agent takes a read-only
 snapshot of `@system` and of every pool volume (and keeps the driver's `state.json`) under
-`/run/ca/snapshots/restore-<time>-from-<version>`. The last two are kept. **There is no automatic restore yet**: they
-preserve the previous state so a restore can be built; today recovering from one is an operator task.
+`/run/ca/snapshots/restore-<time>-from-<version>`. The last two are kept.
+
+### Restoring one (launcher only)
+
+Capability `system-restore-v1`. A person lists the points and restores one in the launcher panel, or with
+`restore-point --operation list` and `restore-point --operation restore --id <point> --accept-data-loss`. No workload can ask
+for it. Only a point taken under **the appliance version now running** can be restored (K3s must not move backwards under
+its database); to go back across an appliance update, run the matching appliance first.
+
+Asking records the request on the disk and restarts the appliance. The restore then runs in `init-data`, before K3s or
+anything else writes to the disk (`/var/lib` is mounted in the initrd, so it is replaced in place, not swapped):
+
+1. The state being replaced is first kept as a restore point of its own (`...-from-before-restore`). Nothing is deleted
+   before that point exists, and the point being restored from is never pruned.
+2. `/var/lib` is emptied except the image cache, the live journal and the pool; the point's `@system` snapshot is copied over
+   it (reflinks, so it is cheap); every pool volume is replaced by the point's copy and the driver's `state.json` is the
+   point's; the image cache is emptied and re-downloaded.
+3. If it fails part-way, the point from step 1 is restored in its place. If that fails too, the cluster does **not** start
+   (the console says why); both states are still in `@snapshots`. A power cut mid-restore resumes it at the next boot.
+
+What a restore does not cover: CSI `VolumeSnapshot` data (the snapshots directory in the pool is left as it is, so snapshots
+made after the point become orphans that still occupy space), anything outside the disk (images, registries, external
+systems), and application-level consistency: it is the disk as it was, not point-in-time recovery of any database. It
+discards everything written since, including workloads installed since.
 
 ## Image cache and unclean shutdowns
 

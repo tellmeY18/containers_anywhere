@@ -174,6 +174,7 @@ in
     wantedBy = [ "multi-user.target" ];
     after = [ "local-fs.target" ];
     path = [ pkgs.systemd config.services.k3s.package pkgs.btrfs-progs pkgs.e2fsprogs ];
+    environment.CA_APPLIANCE_VERSION = lib.removeSuffix "\n" (builtins.readFile ../APPLIANCE_VERSION);
     serviceConfig = { ExecStart = "${agent}/bin/guest guest"; Restart = "on-failure"; };
   };
   # Fail closed before anything writes to the data disk: the disk must be empty
@@ -186,7 +187,7 @@ in
     after = [ "local-fs.target" ];
     conflicts = [ "shutdown.target" ];
     unitConfig.DefaultDependencies = false;
-    path = [ pkgs.btrfs-progs pkgs.e2fsprogs ];
+    path = [ pkgs.btrfs-progs pkgs.e2fsprogs pkgs.coreutils ];
     environment.CA_APPLIANCE_VERSION = lib.removeSuffix "\n" (builtins.readFile ../APPLIANCE_VERSION);
     serviceConfig = {
       Type = "oneshot";

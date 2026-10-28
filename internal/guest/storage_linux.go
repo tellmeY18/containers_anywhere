@@ -29,6 +29,11 @@ func initData(varLib string) error {
 	if err := initDataFormat(varLib); err != nil {
 		return err
 	}
+	// A restore that a person asked for in the launcher runs now, before the cluster or anything
+	// else writes to the disk. Only an inconsistent result may refuse to boot.
+	if err := applyPendingRestore(varLib); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	// K3s keeps its node password here and /etc/rancher/node links to it.

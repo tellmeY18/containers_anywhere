@@ -19,7 +19,7 @@ func (f *fakeFS) Snapshot(_ context.Context, src, dst string, _ bool) error {
 		return os.ErrNotExist
 	}
 	f.subs[dst] = true
-	return os.MkdirAll(dst, 0o755)
+	return copyTree(src, dst)
 }
 func (f *fakeFS) DeleteSubvolume(_ context.Context, p string) error {
 	delete(f.subs, p)
@@ -103,4 +103,33 @@ func TestSessionMarkerDetectsAnUncleanEndAndTheImageCacheIsCleared(t *testing.T)
 	if err := ResetImageCache(t.TempDir()); err != nil {
 		t.Fatal("a missing cache is not an error:", err)
 	}
+}
+
+// copyTree copies the files under src into dst (created if needed). Tests use it for snapshots
+// and as the restore's copier.
+func copyTree(src, dst string) error {
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		s, d := filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())
+		if e.IsDir() {
+			if err := copyTree(s, d); err != nil {
+				return err
+			}
+			continue
+		}
+		b, err := os.ReadFile(s)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(d, b, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -19,7 +19,7 @@ func Required() []string {
 // off, against an appliance that lacks them: apps update far more often than the
 // appliance, and a new feature must never strand an appliance that is already
 // installed or make it impossible to update.
-func Optional() []string { return []string{"host-api-v1", "storage-v1"} }
+func Optional() []string { return []string{"host-api-v1", "storage-v1", "system-restore-v1"} }
 
 // Capabilities is what a current appliance advertises.
 func Capabilities() []string { return append(Required(), Optional()...) }

@@ -48,6 +48,7 @@ func Main() error {
 	host := newGuestHostAPI()
 	go host.run(context.Background())
 	host.routes(mux)
+	host.restoreRoutes(mux)
 	mux.HandleFunc("GET /_agent/logs", func(w http.ResponseWriter, r *http.Request) {
 		cmd := exec.CommandContext(r.Context(), "journalctl", "--no-pager", "-n", "200", "-u", "k3s", "-u", "console-forward", "-u", "containers-agent")
 		cmd.Stdout, cmd.Stderr = w, w
