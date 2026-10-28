@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -74,5 +75,30 @@ func TestMaintainPlatformRetriesUntilGuestAccepts(t *testing.T) {
 	maintainPlatform(context.Background(), client)
 	if calls != 2 {
 		t.Fatalf("calls = %d, want a retry then success", calls)
+	}
+}
+
+// The publication and Ingress admission policies and the Go check each encode which hostnames a namespace
+// may use. They were once changed one at a time, so CNCM could create a publication but not its Ingress.
+// Each rule must carry the same hostname clauses.
+func TestHostnamePoliciesStayInSync(t *testing.T) {
+	pub, err := os.ReadFile("nix/publication.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw, err := os.ReadFile("platform/gateway.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, clause := range []string{
+		"+ '.local')",
+		"+ '.localhost')",
+		"namespace != 'demo'",
+		"namespace + '.local', ",
+		"namespace + '.localhost']",
+	} {
+		if !strings.Contains(string(pub), clause) || !strings.Contains(string(gw), clause) {
+			t.Errorf("hostname clause %q must appear in both nix/publication.yaml and platform/gateway.yaml", clause)
+		}
 	}
 }
