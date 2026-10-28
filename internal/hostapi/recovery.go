@@ -55,12 +55,29 @@ type RecoveryPoint struct {
 	SHA256      string `json:"sha256,omitempty"`
 	Verified    bool   `json:"verified"`
 	Error       string `json:"error,omitempty"`
+	// What a restore of this point needs to match.
+	ApplianceVersion string       `json:"applianceVersion,omitempty"`
+	Arch             string       `json:"arch,omitempty"`
+	DataBytes        int64        `json:"dataBytes,omitempty"`
+	RestorePlan      *RestorePlan `json:"restorePlan,omitempty"`
+}
+
+// RestorePlan is the launcher's honest answer to "could this point be restored here, and
+// at what cost?". It is computed, not promised: restoring is never automatic.
+type RestorePlan struct {
+	Feasible         bool     `json:"feasible"`
+	Blockers         []string `json:"blockers,omitempty"`
+	Warnings         []string `json:"warnings,omitempty"`
+	NeedsFreeBytes   int64    `json:"needsFreeBytes"`
+	ExpectedDataLoss string   `json:"expectedDataLoss"`
+	// Precedence says which appliance a restore needs relative to the one running now.
+	Precedence string `json:"precedence,omitempty"`
 }
 
 func (p RecoveryPoint) validate() error {
 	if !destinationID.MatchString(p.ID) || !destinationID.MatchString(p.Destination) || !validString(p.Trigger) ||
 		!validString(p.Phase) || !validString(p.Consistency) || !validString(p.StartedAt) || !validString(p.FinishedAt) ||
-		!validString(p.SHA256) || !validString(p.Error) || p.SizeBytes < 0 {
+		!validString(p.SHA256) || !validString(p.Error) || !validString(p.ApplianceVersion) || !validString(p.Arch) || p.SizeBytes < 0 || p.DataBytes < 0 || !validPlan(p.RestorePlan) {
 		return errors.New("invalid recovery point")
 	}
 	switch p.Phase {
@@ -163,4 +180,19 @@ func (c *Controller) ReconcileRecoveryPoints(ctx context.Context) error {
 	c.pointsWritten, c.pointsKey, c.pointsWrite = true, key, now
 	c.mu.Unlock()
 	return nil
+}
+
+func validPlan(r *RestorePlan) bool {
+	if r == nil {
+		return true
+	}
+	if len(r.Blockers) > 8 || len(r.Warnings) > 8 || r.NeedsFreeBytes < 0 || !validString(r.ExpectedDataLoss) || !validString(r.Precedence) {
+		return false
+	}
+	for _, v := range append(append([]string{}, r.Blockers...), r.Warnings...) {
+		if !validString(v) {
+			return false
+		}
+	}
+	return true
 }

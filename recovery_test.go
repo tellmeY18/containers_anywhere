@@ -197,3 +197,41 @@ func TestTheRecoveryKeyIsCreatedOnceAndOnlyExportedByTheLauncher(t *testing.T) {
 		t.Fatal("the key must never be published")
 	}
 }
+
+func TestRestorePlanReportsBlockersAndPrecedence(t *testing.T) {
+	state, dest := recoveryFixture(t)
+	queueRecovery(state, dest.ID, "request")
+	runRecoveryJob(state)
+	points, _ := loadPoints(state)
+	p := points[0]
+	if p.ApplianceVersion != "test" || p.Arch != runtime.GOARCH || p.DataBytes <= 0 {
+		t.Fatalf("a point must record what a restore needs: %+v", p)
+	}
+	plan := restorePlan(state, p)
+	if !plan.Feasible || len(plan.Blockers) != 0 || !strings.Contains(plan.ExpectedDataLoss, p.FinishedAt) || !strings.Contains(plan.Precedence, "matches") {
+		t.Fatalf("%+v", plan)
+	}
+	q := p
+	q.Arch = "other"
+	if plan := restorePlan(state, q); plan.Feasible || !strings.Contains(strings.Join(plan.Blockers, " "), "architecture") {
+		t.Fatalf("%+v", plan)
+	}
+	q = p
+	q.ApplianceVersion = "9.9.9"
+	if plan := restorePlan(state, q); !plan.Feasible || !strings.Contains(plan.Precedence, "needs appliance 9.9.9") {
+		t.Fatalf("%+v", plan)
+	}
+	q = p
+	q.DataBytes = 1 << 60
+	if plan := restorePlan(state, q); plan.Feasible || !strings.Contains(strings.Join(plan.Blockers, " "), "free") {
+		t.Fatalf("%+v", plan)
+	}
+	os.Remove(filepath.Join(dest.Path, p.ID+".age"))
+	if plan := restorePlan(state, p); plan.Feasible {
+		t.Fatalf("a missing file must block: %+v", plan)
+	}
+	os.Remove(filepath.Join(state, recoveryKeyFile))
+	if plan := restorePlan(state, p); len(plan.Warnings) == 0 {
+		t.Fatal("a missing key must be warned about")
+	}
+}

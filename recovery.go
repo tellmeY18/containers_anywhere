@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 
 	"filippo.io/age"
 
+	"github.com/tellmeY18/containers_anywhere/internal/diskspace"
 	"github.com/tellmeY18/containers_anywhere/internal/hostapi"
 )
 
@@ -229,6 +231,12 @@ func runRecoveryJob(state string) {
 		"sha256": sum, "appVersion": appVersion, "encryption": "age (X25519); the key is held by the launcher and is not in this folder",
 		"note": "Whole-appliance cold copy. Not point-in-time recovery of any application."}, "", "  ")
 	_ = os.WriteFile(filepath.Join(d.Path, p.ID+".json"), meta, 0600)
+	if m, err := readManifest(filepath.Join(state, "release.json")); err == nil {
+		p.ApplianceVersion, p.Arch = m.Version, m.Arch
+	}
+	if info, err := os.Stat(filepath.Join(state, "data.img")); err == nil {
+		p.DataBytes = info.Size()
+	}
 	p.Phase, p.SizeBytes, p.SHA256, p.Verified, p.FinishedAt = hostapi.PointComplete, size, sum, true, time.Now().UTC().Format(time.RFC3339)
 	_ = savePoint(state, p)
 	applyRetention(state, d)
@@ -450,5 +458,41 @@ func recoveryFacts(state string) ([]hostapi.RecoveryPoint, *hostapi.BackupSchedu
 	if len(points) > 30 {
 		points = points[len(points)-30:]
 	}
+	for i := range points {
+		if points[i].Phase == hostapi.PointComplete && points[i].Verified {
+			points[i].RestorePlan = restorePlan(state, points[i])
+		}
+	}
 	return points, scheduleStatus(state, time.Now()), recoveryKitFact(state)
+}
+
+// restorePlan reports whether a point could be restored on this computer now. A restore
+// goes into a new, empty state directory with the exact appliance the point was taken with;
+// nothing here changes anything.
+func restorePlan(state string, p hostapi.RecoveryPoint) *hostapi.RestorePlan {
+	plan := &hostapi.RestorePlan{NeedsFreeBytes: p.DataBytes, ExpectedDataLoss: "Everything written after " + p.FinishedAt}
+	block := func(s string) { plan.Blockers = append(plan.Blockers, s) }
+	if d, err := findDestination(state, p.Destination); err != nil {
+		block("The destination is no longer enrolled")
+	} else if _, err := os.Stat(filepath.Join(d.Path, p.ID+".age")); err != nil {
+		block("The recovery point file is not reachable. If it is on a removable disk, connect the disk.")
+	}
+	if _, err := os.Stat(filepath.Join(state, recoveryKeyFile)); err != nil {
+		plan.Warnings = append(plan.Warnings, "The recovery key is not on this computer; restoring needs the copy you saved elsewhere")
+	}
+	if p.Arch != "" && p.Arch != runtime.GOARCH {
+		block("This point was taken on " + p.Arch + "; a cold disk restore needs the same architecture (this computer is " + runtime.GOARCH + ")")
+	}
+	if u, err := diskspace.Of(state); err == nil && p.DataBytes > 0 && u.Free < uint64(p.DataBytes) {
+		block(fmt.Sprintf("A restore writes the full %d GiB data disk; this computer has %d GiB free", p.DataBytes>>30, u.Free>>30))
+	}
+	if cur, err := readManifest(filepath.Join(state, "release.json")); err == nil && p.ApplianceVersion != "" {
+		if cur.Version == p.ApplianceVersion {
+			plan.Precedence = "This point matches the appliance now running (" + cur.Version + ")."
+		} else {
+			plan.Precedence = "This point needs appliance " + p.ApplianceVersion + " (" + cur.Version + " is running now). The matching appliance must be used for the restore; rolling the appliance back is a separate step that comes first."
+		}
+	}
+	plan.Feasible = len(plan.Blockers) == 0
+	return plan
 }
