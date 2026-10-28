@@ -19,6 +19,11 @@ const (
 // may refuse to boot; the layout and the restore point report problems on the
 // console and let the appliance come up, because the data is intact either way.
 func initData(varLib string) error {
+	// The mount roots must be root-owned before systemd-tmpfiles runs, or it refuses to
+	// create anything beneath them.
+	if err := storage.EnsureRootOwned(varLib, snapshotsDir); err != nil {
+		fmt.Fprintln(os.Stderr, "mount root ownership:", err)
+	}
 	if err := initDataFormat(varLib); err != nil {
 		return err
 	}
@@ -33,6 +38,14 @@ func initData(varLib string) error {
 		fmt.Fprintln(os.Stderr, "storage layout:", err)
 	}
 	linkJournal(varLib)
+	if unclean, err := storage.BeginSession(varLib); err != nil {
+		fmt.Fprintln(os.Stderr, "session marker:", err)
+	} else if unclean {
+		fmt.Fprintln(os.Stdout, "the previous session did not end cleanly: discarding the container image cache (volumes are untouched)")
+		if err := storage.ResetImageCache(varLib); err != nil {
+			fmt.Fprintln(os.Stderr, "image cache reset:", err)
+		}
+	}
 	point, err := storage.TakeRestorePointOnChange(ctx, fs, storage.RestorePointConfig{
 		VarLib: varLib, SnapshotsDir: snapshotsDir, VolumesDir: volumesDir,
 		Version: os.Getenv("CA_APPLIANCE_VERSION"), Keep: 2,
@@ -65,3 +78,6 @@ func linkJournal(varLib string) {
 		}
 	}
 }
+
+// endSession runs when the appliance shuts down, after the cluster has stopped.
+func endSession(varLib string) error { return storage.EndSession(varLib) }

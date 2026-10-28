@@ -234,3 +234,40 @@ func TestEnsureLayoutAndRestorePointOnVersionChange(t *testing.T) {
 		t.Fatal("volumes must be part of the restore point")
 	}
 }
+
+func TestSessionMarkerDetectsAnUncleanEndAndTheImageCacheIsCleared(t *testing.T) {
+	varLib := t.TempDir()
+	if unclean, err := BeginSession(varLib); unclean || err != nil {
+		t.Fatalf("a first boot is not unclean: %v %v", unclean, err)
+	}
+	cache := filepath.Join(varLib, imageCache)
+	os.MkdirAll(filepath.Join(cache, "io.containerd.snapshotter.v1.overlayfs", "snapshots", "1"), 0o755)
+	os.WriteFile(filepath.Join(cache, "containerd.log"), []byte("x"), 0o600)
+	vol := filepath.Join(varLib, "rancher/k3s/storage/app/data")
+	os.MkdirAll(vol, 0o755)
+	os.WriteFile(filepath.Join(vol, "keep"), []byte("data"), 0o600)
+	if unclean, _ := BeginSession(varLib); !unclean {
+		t.Fatal("a session that never ended must be reported unclean")
+	}
+	if err := ResetImageCache(varLib); err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ := os.ReadDir(cache); len(entries) != 0 {
+		t.Fatalf("image cache not emptied: %v", entries)
+	}
+	if _, err := os.Stat(cache); err != nil {
+		t.Fatal("the cache directory itself must remain")
+	}
+	if _, err := os.Stat(filepath.Join(vol, "keep")); err != nil {
+		t.Fatal("workload volumes must never be touched")
+	}
+	if err := EndSession(varLib); err != nil {
+		t.Fatal(err)
+	}
+	if unclean, _ := BeginSession(varLib); unclean {
+		t.Fatal("a clean shutdown must not be reported as unclean")
+	}
+	if err := ResetImageCache(t.TempDir()); err != nil {
+		t.Fatal("a missing cache is not an error:", err)
+	}
+}

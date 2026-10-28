@@ -199,6 +199,23 @@ in
       ExecStart = "${agent}/bin/guest guest init-data";
     };
   };
+  # Marks a clean shutdown. It starts before K3s, so on shutdown it stops after K3s has
+  # stopped; if the VM dies instead, the marker is still there at the next boot and the
+  # agent discards the container image cache, which an unclean stop can leave with
+  # empty files.
+  systemd.services.ca-session = {
+    description = "Record a clean shutdown of the appliance";
+    wantedBy = [ "multi-user.target" ];
+    before = [ "k3s.service" ];
+    after = [ "data-format.service" ];
+    unitConfig.RequiresMountsFor = "/var/lib";
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = "${pkgs.coreutils}/bin/true";
+      ExecStop = "${agent}/bin/guest guest clean-shutdown";
+    };
+  };
   # The data disk is created once by the host launcher and is never formatted,
   # repartitioned or recreated by any root image.
   assertions = [

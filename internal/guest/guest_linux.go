@@ -19,6 +19,9 @@ import (
 )
 
 func Main() error {
+	if len(os.Args) == 3 && os.Args[2] == "clean-shutdown" {
+		return endSession("/var/lib")
+	}
 	if len(os.Args) == 3 && os.Args[2] == "init-data" {
 		return initData("/var/lib")
 	}

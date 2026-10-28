@@ -2,8 +2,8 @@
 
 The data disk is a single btrfs filesystem. Persistent state lives under `/var/lib`, as before,
 but it is now divided into subvolumes so that snapshots, restore points and per-volume operations
-are cheap and independent. **This is new in 0.4.0 and has had little testing: use disposable data.**
-There is no migration from 0.3.x; start 0.4.0 with a new empty state directory.
+are cheap and independent. **This is new in 0.4 and has had little testing: use disposable data.**
+There is no migration from 0.3.x; start 0.4.x with a new empty state directory.
 
 ## Layout
 
@@ -70,6 +70,15 @@ guest takes a read-only snapshot of `@system` and of every volume under
 `/run/ca/snapshots/restore-<time>-from-<version>`. The last two are kept. **There is no
 automatic restore yet**: they preserve the previous state so a restore can be built; today
 recovering from one is an operator task.
+
+## Image cache and unclean shutdowns
+
+The container image cache (`rancher/k3s/agent/containerd`) is a copy of what registries hold. After a
+shutdown that was not clean (a panic, a killed VM, power loss), btrfs can keep a file that containerd
+extracted but lose its data, so a binary is empty while containerd believes the layer is fine. The agent
+keeps a session marker (`containers-anywhere/session`), removed by a unit that stops after K3s on a clean
+shutdown. If the marker is present at boot, the cache is emptied and re-downloaded. Volumes and the cluster
+database are never touched.
 
 ## Growing the disk
 
