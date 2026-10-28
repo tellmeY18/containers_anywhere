@@ -45,7 +45,6 @@ func Main() error {
 	gateway := &guestGateway{}
 	go gateway.refresh(context.Background())
 	gateway.routes(mux)
-	startStorage(context.Background())
 	host := newGuestHostAPI()
 	go host.run(context.Background())
 	host.routes(mux)

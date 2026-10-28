@@ -1,0 +1,45 @@
+# Storage classes and the snapshot class for the btrfs CSI driver.
+#   btrfs            default; copy-on-write on (cheap snapshots, checksums cover the data)
+#   btrfs-nodatacow  copy-on-write off for new files, for databases with many small random writes.
+#                    btrfs checksums do not cover these files; choose it deliberately. Chosen at creation
+#                    only: it cannot be changed on an existing volume.
+#   local-path       an alias of btrfs, so manifests that ask for the old K3s class keep working
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: btrfs
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: btrfs.csi.local
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: btrfs-nodatacow
+provisioner: btrfs.csi.local
+parameters:
+  cow: "false"
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-path
+provisioner: btrfs.csi.local
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+---
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: btrfs
+  annotations:
+    snapshot.storage.kubernetes.io/is-default-class: "true"
+driver: btrfs.csi.local
+deletionPolicy: Delete

@@ -54,7 +54,7 @@ func TestAnalyzeManifestRisksAndBlocks(t *testing.T) {
 	if s := analyzeManifest([]byte("# privileged: true\nkind: ConfigMap\n# cluster-admin\n")); len(s.Risks) != 0 {
 		t.Fatalf("comments counted: %+v", s.Risks)
 	}
-	for _, ns := range []string{"kube-system", "kite-system", "containers-gateway", "containers-demo", "kube-public"} {
+	for _, ns := range []string{"kube-system", "kite-system", "containers-gateway", "containers-demo", "kube-public", "btrfs-csi", "snapshot-system"} {
 		if s := analyzeManifest([]byte("kind: ConfigMap\nmetadata:\n  namespace: " + ns + "\n")); s.riskLevel() != "blocked" {
 			t.Fatalf("%s not blocked", ns)
 		}

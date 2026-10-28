@@ -26,12 +26,14 @@ type restorePointMeta struct {
 	Volumes   []string `json:"volumes"`
 }
 
-// RestorePointConfig describes where state lives and how many restore points to keep.
+// RestorePointConfig describes where state lives and how many restore points to keep. PoolDir
+// is the btrfs pool the CSI driver manages: its volumes are subvolumes under PoolDir/volumes,
+// and its state.json maps their ids to claims.
 type RestorePointConfig struct {
-	VarLib, SnapshotsDir, VolumesDir string
-	Version                          string
-	Keep                             int
-	Now                              func() time.Time
+	VarLib, SnapshotsDir, PoolDir string
+	Version                       string
+	Keep                          int
+	Now                           func() time.Time
 }
 
 // TakeRestorePointOnChange snapshots the system subvolume and every volume the first
@@ -84,20 +86,20 @@ func takeRestorePoint(ctx context.Context, fs FS, cfg RestorePointConfig, from s
 	if err := fs.Snapshot(ctx, cfg.VarLib, filepath.Join(dir, "system"), true); err != nil {
 		return dir, err
 	}
-	nss, _ := os.ReadDir(cfg.VolumesDir)
-	for _, ns := range nss {
-		vols, _ := os.ReadDir(filepath.Join(cfg.VolumesDir, ns.Name()))
-		for _, v := range vols {
-			src := filepath.Join(cfg.VolumesDir, ns.Name(), v.Name())
-			if !fs.IsSubvolume(ctx, src) {
-				continue
-			}
-			name := "vol-" + ns.Name() + "-" + v.Name()
-			if err := fs.Snapshot(ctx, src, filepath.Join(dir, name), true); err != nil {
-				return dir, err
-			}
-			meta.Volumes = append(meta.Volumes, ns.Name()+"/"+v.Name())
+	vols, _ := os.ReadDir(filepath.Join(cfg.PoolDir, "volumes"))
+	for _, v := range vols {
+		src := filepath.Join(cfg.PoolDir, "volumes", v.Name())
+		if !fs.IsSubvolume(ctx, src) {
+			continue
 		}
+		if err := fs.Snapshot(ctx, src, filepath.Join(dir, "vol-"+v.Name()), true); err != nil {
+			return dir, err
+		}
+		meta.Volumes = append(meta.Volumes, v.Name())
+	}
+	// The driver's state file says which volume id belongs to which claim.
+	if b, err := os.ReadFile(filepath.Join(cfg.PoolDir, "state.json")); err == nil {
+		_ = os.WriteFile(filepath.Join(dir, "pool-state.json"), b, 0o600)
 	}
 	b, _ := json.Marshal(meta)
 	if err := os.WriteFile(filepath.Join(dir, "meta.json"), b, 0o600); err != nil {

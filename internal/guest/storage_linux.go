@@ -11,13 +11,15 @@ import (
 )
 
 const (
-	volumesDir   = "/var/lib/rancher/k3s/storage"
+	// The CSI driver, run by the app, keeps its pool in this subvolume (it bind-mounts it at
+	// /var/lib/btrfs-csi/default). The appliance only needs the path to include it in restore points.
+	poolDir      = "/var/lib/btrfs-csi-pool"
 	snapshotsDir = "/run/ca/snapshots"
 )
 
 // initData runs before the cluster starts. The marker check is the only step that
-// may refuse to boot; the layout and the restore point report problems on the
-// console and let the appliance come up, because the data is intact either way.
+// may refuse to boot; the rest report problems on the console and let the appliance
+// come up, because the data is intact either way.
 func initData(varLib string) error {
 	// The mount roots must be root-owned before systemd-tmpfiles runs, or it refuses to
 	// create anything beneath them.
@@ -47,7 +49,7 @@ func initData(varLib string) error {
 		}
 	}
 	point, err := storage.TakeRestorePointOnChange(ctx, fs, storage.RestorePointConfig{
-		VarLib: varLib, SnapshotsDir: snapshotsDir, VolumesDir: volumesDir,
+		VarLib: varLib, SnapshotsDir: snapshotsDir, PoolDir: poolDir,
 		Version: os.Getenv("CA_APPLIANCE_VERSION"), Keep: 2,
 	})
 	if err != nil {
@@ -56,13 +58,6 @@ func initData(varLib string) error {
 		fmt.Fprintln(os.Stdout, "restore point taken:", point)
 	}
 	return nil
-}
-
-// startStorage provisions volumes and serves the snapshot API for the life of the agent.
-func startStorage(ctx context.Context) {
-	c := storage.NewController(storage.KubectlKube{Kubeconfig: "/etc/rancher/k3s/k3s.yaml"}, storage.NewBtrfsFS(), volumesDir, snapshotsDir)
-	c.Log = func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) }
-	go c.Run(ctx, 4*time.Second)
 }
 
 // linkJournal points /var/log/journal at the journal on the data disk before the

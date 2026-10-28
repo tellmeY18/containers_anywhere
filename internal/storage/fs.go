@@ -1,6 +1,7 @@
-// Package storage manages the btrfs data disk: per-volume subvolumes for
-// PersistentVolumeClaims, workload snapshots, and the restore point taken when the
-// appliance root changes. Nothing here is specific to an application.
+// Package storage holds the appliance's boot-time duties for the btrfs data disk: a root-owned
+// mount root, the nested subvolumes for the image cache and journal, the session marker that
+// detects an unclean shutdown, and the restore point taken when the appliance version changes.
+// Volumes, snapshots and clones are not here: they are a standard CSI driver run by the app.
 package storage
 
 import (
@@ -20,8 +21,6 @@ type FS interface {
 	Snapshot(ctx context.Context, src, dst string, readOnly bool) error
 	DeleteSubvolume(ctx context.Context, path string) error
 	IsSubvolume(ctx context.Context, path string) bool
-	SetNoCOW(ctx context.Context, path string) error
-	FreeFraction(path string) (float64, error)
 }
 
 type runner func(ctx context.Context, name string, args ...string) ([]byte, error)
@@ -63,30 +62,12 @@ func (f *BtrfsFS) IsSubvolume(ctx context.Context, path string) bool {
 	return err == nil
 }
 
-// SetNoCOW turns copy-on-write off for files created afterwards in an empty
-// directory. It trades btrfs checksums and cheap snapshots of that data for
-// steadier random writes, so it is only used when a volume class asks for it.
-func (f *BtrfsFS) SetNoCOW(ctx context.Context, path string) error {
-	_, err := f.run(ctx, "chattr", "+C", path)
-	return err
-}
-
-func (f *BtrfsFS) FreeFraction(path string) (float64, error) { return freeFraction(path) }
-
-// within reports whether p is strictly inside dir after cleaning, so a crafted
-// name can never point the controller outside the directories it owns.
-func within(dir, p string) bool {
-	dir, p = filepath.Clean(dir), filepath.Clean(p)
-	return p != dir && strings.HasPrefix(p, dir+string(filepath.Separator))
-}
-
 // EnsureLayout creates the nested subvolumes that keep re-downloadable or churny
 // data out of restore points. It never converts or removes an existing directory.
 func EnsureLayout(ctx context.Context, fs FS, varLib string) error {
 	var errs []error
 	for _, rel := range []string{
 		"rancher/k3s/agent/containerd",
-		"rancher/k3s/storage",
 		"containers-anywhere/journal",
 	} {
 		p := filepath.Join(varLib, rel)

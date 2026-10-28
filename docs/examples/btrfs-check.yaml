@@ -1,0 +1,133 @@
+# Evaluates the btrfs data disk from inside the cluster. Paste it into Kite (Apply YAML), then open the
+# logs of the two Deployments in the btrfs-check namespace.
+#
+#   btrfs-canary  writes 1 MiB of random data to a volume every minute, checksums it, and re-verifies the 10
+#                 newest files it has written (about 10 MiB in total; older ones are deleted). Any "CORRUPT" line means btrfs returned different bytes than it was given.
+#   btrfs-health  a read-only look at the data disk (space, error counters, subvolumes, scrub, snapshots, the
+#                 image cache). It is PRIVILEGED and mounts the VM's root read-only to do that: this is a
+#                 disposable test, delete the namespace when you are done.
+#
+# A standard VolumeSnapshot of the canary volume is taken once (Kubernetes retries it until the volume is bound).
+# Needs internet once (the health pod installs btrfs-progs). Remove it with:  kubectl delete ns btrfs-check
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: btrfs-check
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: canary-data
+  namespace: btrfs-check
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: canary-snap
+  namespace: btrfs-check
+spec:
+  source:
+    persistentVolumeClaimName: canary-data
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: btrfs-canary
+  namespace: btrfs-check
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: btrfs-canary}
+  template:
+    metadata:
+      labels: {app: btrfs-canary}
+    spec:
+      containers:
+        - name: canary
+          image: docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 64Mi}
+          command: ["sh", "-c"]
+          args:
+            - |
+              cd /data
+              echo "btrfs canary started on $(df -h /data | awk 'NR==2{print $1}')"
+              while true; do
+                f=blk-$(date +%s)
+                dd if=/dev/urandom of=$f bs=1M count=1 2>/dev/null
+                sha256sum $f > $f.sha
+                sync
+                ok=0; bad=0
+                for s in *.sha; do
+                  if sha256sum -c "$s" >/dev/null 2>&1; then ok=$((ok+1)); else bad=$((bad+1)); echo "CORRUPT: $s"; fi
+                done
+                echo "$(date -u +%FT%TZ) wrote $f; verified $ok files, $bad corrupt; this volume holds $(du -sh /data | cut -f1)"
+                ls -1 blk-*[0-9] 2>/dev/null | head -n -10 | while read o; do rm -f "$o" "$o.sha"; done
+                sleep 60
+              done
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: canary-data}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: btrfs-health
+  namespace: btrfs-check
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: btrfs-health}
+  template:
+    metadata:
+      labels: {app: btrfs-health}
+    spec:
+      containers:
+        - name: health
+          image: docker.io/library/alpine:3.21
+          securityContext:
+            privileged: true
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          command: ["sh", "-c"]
+          args:
+            - |
+              H=/host
+              FS=$H/var/lib
+              apk add --no-cache btrfs-progs >/dev/null 2>&1 || echo "could not install btrfs-progs (this pod needs internet once)"
+              while true; do
+                echo "================ $(date -u +%FT%TZ) btrfs health"
+                echo "--- mounts"; grep " btrfs " $H/proc/mounts | cut -d' ' -f1-4
+                echo "--- space"
+                df -P $FS | awk 'NR==2{printf "used %s of %s blocks, free %.0f%% (snapshots and clones are refused below 15%%)\n", $3, $2, 100-$5}'
+                btrfs filesystem usage -T $FS 2>&1 | head -22
+                echo "--- error counters (all zero = healthy)"; btrfs device stats $FS 2>&1
+                echo "--- subvolumes (system, snapshots, images, each volume)"; btrfs subvolume list -t $FS 2>&1 | head -40
+                echo "--- scrub"; btrfs scrub status $FS 2>&1 | head -10
+                echo "--- volumes and snapshots held by the CSI driver, and appliance restore points"
+                ls $H/var/lib/btrfs-csi-pool/volumes $H/var/lib/btrfs-csi-pool/snapshots 2>&1
+                ls $H/run/ca/snapshots 2>&1
+                echo "--- image cache integrity (an empty executable means a corrupt image)"
+                n=$(find $FS/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs -type f -size 0 -perm /111 2>/dev/null | wc -l)
+                echo "empty executables: $n"
+                echo "--- kernel log"
+                dmesg | grep -i -E "btrfs.*(error|warn|corrupt|csum)|kernel panic|oops" | tail -5
+                echo "(nothing above this line in the kernel section = no btrfs errors)"
+                sleep 120
+              done
+          volumeMounts:
+            - {name: host, mountPath: /host, readOnly: true}
+      volumes:
+        - name: host
+          hostPath: {path: /, type: Directory}

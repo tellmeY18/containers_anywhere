@@ -128,7 +128,6 @@ in
     # are platform workloads applied by the host app and pulled at runtime.
     images = [ config.services.k3s.package.airgap-images ];
     manifests.publication.source = ./publication.yaml;
-    manifests.storage.source = ./storage.yaml;
   };
   # The root filesystem is disposable. Retain the node password across boots,
   # alongside the cluster database, containerd images and local-path volumes.

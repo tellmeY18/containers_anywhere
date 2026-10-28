@@ -32,12 +32,12 @@ in ROADMAP.md. Planned recovery features must not be described as implemented.
   identical K3s, copies no data and falls back to the old root automatically. A K3s
   patch release uses the full update transaction. The data disk carries a
   `data-format.json` marker that the guest checks before anything writes to it, and no
-  root image may format it. The data disk is btrfs (docs/STORAGE.md): @system is /var/lib,
-  @snapshots is mounted at /run/ca/snapshots, and volumes, images and logs are nested
-  subvolumes. Its mkfs features are pinned in nix/bundle.nix and the filesystem is
-  permanent once installed. BEFORE PRODUCTION (v1.0.0): prove btrfs under load and
-  power loss on every platform, build the system-level restore from a restore point,
-  and replace the cold-copy transaction with guest-side snapshot/restore.
+  root image may format it. The data disk is btrfs (docs/STORAGE.md): @system is /var/lib and @snapshots is
+  mounted at /run/ca/snapshots. The appliance stays vanilla K3s plus a few boot-time duties; volumes, snapshots, clones
+  and expansion are a standard CSI driver (mporrato/btrfs-csi) delivered by the app as pinned platform workloads, never
+  baked into the appliance. The disk's mkfs features are pinned in nix/bundle.nix and the filesystem is permanent once
+  installed. BEFORE PRODUCTION (v1.0.0): prove btrfs under load and power loss on every platform, build the system-level
+  restore from a restore point, and replace the cold-copy transaction with guest-side snapshot/restore.
 - Host capabilities offered to workloads go through the generic host API
   (`internal/hostapi`, `platform/hostapi.yaml`, docs/HOST_API.md): read-only status
   plus approval-gated requests, approved only in the launcher, with no host token ever

@@ -51,7 +51,7 @@ var (
 	repoNamePattern   = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$`)
 	branchPattern     = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,100}$`)
 	storeSlugPattern  = regexp.MustCompile(`[^a-z0-9]+`)
-	reservedNamespace = regexp.MustCompile(`^(kube-.*|kite-system|containers-gateway|containers-demo)$`)
+	reservedNamespace = regexp.MustCompile(`^(kube-.*|kite-system|containers-gateway|containers-demo|btrfs-csi|snapshot-system)$`)
 )
 
 func validRepoName(s string) bool {

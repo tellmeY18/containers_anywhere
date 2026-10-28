@@ -1,0 +1,489 @@
+# btrfs CSI driver for the data disk (github.com/mporrato/btrfs-csi, Unlicense), with the standard
+# kubernetes-csi sidecars. Every PersistentVolumeClaim becomes a btrfs subvolume with a hard size limit
+# (simple quotas), and VolumeSnapshots, clones and online expansion are standard Kubernetes APIs.
+# The pool is the btrfs subvolume mounted at /var/lib/btrfs-csi/default by the appliance.
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/component: csi-driver
+    app.kubernetes.io/instance: btrfs-csi
+    app.kubernetes.io/name: btrfs-csi-driver
+    app.kubernetes.io/version: 0.1.0
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: privileged
+  name: btrfs-csi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/component: csi-driver
+    app.kubernetes.io/instance: btrfs-csi
+    app.kubernetes.io/name: btrfs-csi-driver
+    app.kubernetes.io/version: 0.1.0
+  name: btrfs-csi-driver
+  namespace: btrfs-csi
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/component: csi-driver
+    app.kubernetes.io/instance: btrfs-csi
+    app.kubernetes.io/name: btrfs-csi-driver
+    app.kubernetes.io/version: 0.1.0
+  name: btrfs-csi-driver
+  namespace: btrfs-csi
+rules:
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - csistoragecapacities
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - apps
+  resources:
+  - daemonsets
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/component: csi-driver
+    app.kubernetes.io/instance: btrfs-csi
+    app.kubernetes.io/name: btrfs-csi-driver
+    app.kubernetes.io/version: 0.1.0
+  name: btrfs-csi-driver
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumes
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - delete
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - list
+  - watch
+  - create
+  - update
+  - patch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - csinodes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims/status
+  verbs:
+  - update
+  - patch
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshots
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshots/status
+  verbs:
+  - update
+  - patch
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshotcontents
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshotcontents/status
+  verbs:
+  - update
+  - patch
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshotclasses
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: csi-driver
+    app.kubernetes.io/instance: btrfs-csi
+    app.kubernetes.io/name: btrfs-csi-driver
+    app.kubernetes.io/version: 0.1.0
+  name: btrfs-csi-driver
+  namespace: btrfs-csi
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: btrfs-csi-driver
+subjects:
+- kind: ServiceAccount
+  name: btrfs-csi-driver
+  namespace: btrfs-csi
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: csi-driver
+    app.kubernetes.io/instance: btrfs-csi
+    app.kubernetes.io/name: btrfs-csi-driver
+    app.kubernetes.io/version: 0.1.0
+  name: btrfs-csi-driver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: btrfs-csi-driver
+subjects:
+- kind: ServiceAccount
+  name: btrfs-csi-driver
+  namespace: btrfs-csi
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  labels:
+    app.kubernetes.io/component: csi-driver
+    app.kubernetes.io/instance: btrfs-csi
+    app.kubernetes.io/name: btrfs-csi-driver
+    app.kubernetes.io/version: 0.1.0
+  name: btrfs-csi-driver
+  namespace: btrfs-csi
+spec:
+  selector:
+    matchLabels:
+      app: btrfs-csi-driver
+  template:
+    metadata:
+      labels:
+        app: btrfs-csi-driver
+    spec:
+      initContainers:
+      # The pool is a btrfs subvolume of the data disk, bind-mounted where the driver looks for pools.
+      # It is made here, at the app level, so the appliance needs no knowledge of the driver. The mount
+      # is shared, so it stays visible to the host and to the driver container.
+      - name: prepare-pool
+        image: ghcr.io/mporrato/btrfs-csi-driver:stable@sha256:44062b30a5bddce368cd38f62d70cd5fd08daaaefb564f28a732e5478dd9f343
+        securityContext:
+          privileged: true
+        command: ["sh", "-c"]
+        args:
+        - |
+          set -e
+          P=/hostvar/btrfs-csi-pool
+          M=/hostvar/btrfs-csi/default
+          [ -d "$P" ] || btrfs subvolume create "$P"
+          mkdir -p "$M"
+          mountpoint -q "$M" || mount --bind "$P" "$M"
+        volumeMounts:
+        - name: hostvar
+          mountPath: /hostvar
+          mountPropagation: Bidirectional
+      containers:
+      - args:
+        - --csi-address=/csi/csi.sock
+        - --leader-election
+        - --timeout=300s
+        image: registry.k8s.io/sig-storage/csi-snapshotter:v8.0.0@sha256:6d4a90d6e164db684684295e28ad4b012d7c8a29ee4103cfb7611ce2e9c884bb
+        name: external-snapshotter
+        resources:
+          limits:
+            cpu: 20m
+            memory: 128Mi
+          requests:
+            cpu: 5m
+            memory: 32Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - mountPath: /csi
+          name: socket-dir
+      - args:
+        - --endpoint=unix:///csi/csi.sock
+        - --nodeid=$(NODE_NAME)
+        - --kubelet-dir=/var/lib/kubelet
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        image: ghcr.io/mporrato/btrfs-csi-driver:stable@sha256:44062b30a5bddce368cd38f62d70cd5fd08daaaefb564f28a732e5478dd9f343
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /healthz
+            port: healthz
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+        name: btrfs-csi-driver
+        ports:
+        - containerPort: 9808
+          name: healthz
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /healthz
+            port: healthz
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+        resources:
+          limits:
+            cpu: 40m
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 32Mi
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - mountPath: /csi
+          name: socket-dir
+        - mountPath: /var/lib/kubelet/pods
+          mountPropagation: Bidirectional
+          name: kubelet-pods-dir
+        - mountPath: /var/lib/btrfs-csi
+          mountPropagation: HostToContainer
+          name: pools-base-dir
+      - args:
+        - --csi-address=/csi/csi.sock
+        - --health-port=9808
+        image: registry.k8s.io/sig-storage/livenessprobe:v2.14.0@sha256:33692aed26aaf105b4d6e66280cceca9e0463f500c81b5d8c955428a75438f32
+        name: liveness-probe
+        resources:
+          limits:
+            cpu: 20m
+            memory: 64Mi
+          requests:
+            cpu: 5m
+            memory: 16Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - mountPath: /csi
+          name: socket-dir
+      - args:
+        - --csi-address=/csi/csi.sock
+        - --kubelet-registration-path=/var/lib/kubelet/plugins/btrfs.csi.local/csi.sock
+        image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.11.1@sha256:e01facb9fb9cffaf52d0053bdb979fbd8c505c8e411939a6e026dd061a6b4fbe
+        name: node-driver-registrar
+        resources:
+          limits:
+            cpu: 20m
+            memory: 64Mi
+          requests:
+            cpu: 5m
+            memory: 16Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - mountPath: /csi
+          name: socket-dir
+        - mountPath: /registration
+          name: registration-dir
+      - args:
+        - --csi-address=/csi/csi.sock
+        - --extra-create-metadata
+        - --leader-election
+        - --timeout=120s
+        - --enable-capacity
+        - --capacity-ownerref-level=1
+        env:
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        image: registry.k8s.io/sig-storage/csi-provisioner:v4.0.0@sha256:de79c8bbc271622eb94d2ee8689f189ea7c1cb6adac260a421980fe5eed66708
+        name: external-provisioner
+        resources:
+          limits:
+            cpu: 20m
+            memory: 128Mi
+          requests:
+            cpu: 5m
+            memory: 32Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - mountPath: /csi
+          name: socket-dir
+      - args:
+        - --csi-address=/csi/csi.sock
+        - --leader-election
+        - --timeout=120s
+        image: registry.k8s.io/sig-storage/csi-resizer:v1.14.0@sha256:5e7cbb63fd497fa913caa21fee1a69f727c220c6fa83c5f8bb0995e2ad73a474
+        name: external-resizer
+        resources:
+          limits:
+            cpu: 20m
+            memory: 128Mi
+          requests:
+            cpu: 5m
+            memory: 32Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - mountPath: /csi
+          name: socket-dir
+      priorityClassName: system-node-critical
+      serviceAccountName: btrfs-csi-driver
+      volumes:
+      - hostPath:
+          path: /var/lib
+          type: Directory
+        name: hostvar
+      - hostPath:
+          path: /var/lib/kubelet/plugins/btrfs.csi.local
+          type: DirectoryOrCreate
+        name: socket-dir
+      - hostPath:
+          path: /var/lib/kubelet/plugins_registry
+          type: DirectoryOrCreate
+        name: registration-dir
+      - hostPath:
+          path: /var/lib/kubelet/pods
+          type: DirectoryOrCreate
+        name: kubelet-pods-dir
+      - hostPath:
+          path: /var/lib/btrfs-csi
+          type: DirectoryOrCreate
+        name: pools-base-dir
+---
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  labels:
+    app.kubernetes.io/component: csi-driver
+    app.kubernetes.io/instance: btrfs-csi
+    app.kubernetes.io/name: btrfs-csi-driver
+    app.kubernetes.io/version: 0.1.0
+  name: btrfs.csi.local
+spec:
+  attachRequired: false
+  fsGroupPolicy: File
+  podInfoOnMount: true
+  storageCapacity: true
+  volumeLifecycleModes:
+  - Persistent
