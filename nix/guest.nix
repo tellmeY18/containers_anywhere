@@ -149,8 +149,10 @@ in
       MaxRetentionSec=14day
     '';
   };
-  # Flush the volatile journal only once the symlink above exists.
-  systemd.services.systemd-journal-flush.after = [ "systemd-tmpfiles-setup.service" ];
+  # /var/log/journal is linked to the data disk by the agent's init-data step, which
+  # runs before the flush. Do not order the flush after tmpfiles: systemd already orders
+  # it before tmpfiles, so that is a cycle, and systemd resolves a cycle by dropping one
+  # job at random, which can be tmpfiles itself.
   # The management console is whichever Service carries the label below; the
   # appliance does not know which application provides it. A reconnecting local
   # tunnel avoids NodePort/hostNetwork exposure and survives pod replacement.
@@ -181,7 +183,7 @@ in
     description = "Verify the persistent data disk format";
     wantedBy = [ "sysinit.target" ];
     requiredBy = [ "systemd-tmpfiles-setup.service" "k3s.service" ];
-    before = [ "systemd-tmpfiles-setup.service" "k3s.service" "containers-agent.service" "shutdown.target" ];
+    before = [ "systemd-tmpfiles-setup.service" "systemd-journal-flush.service" "k3s.service" "containers-agent.service" "shutdown.target" ];
     after = [ "local-fs.target" ];
     conflicts = [ "shutdown.target" ];
     unitConfig.DefaultDependencies = false;

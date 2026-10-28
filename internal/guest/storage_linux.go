@@ -32,6 +32,7 @@ func initData(varLib string) error {
 	if err := storage.EnsureLayout(ctx, fs, varLib); err != nil {
 		fmt.Fprintln(os.Stderr, "storage layout:", err)
 	}
+	linkJournal(varLib)
 	point, err := storage.TakeRestorePointOnChange(ctx, fs, storage.RestorePointConfig{
 		VarLib: varLib, SnapshotsDir: snapshotsDir, VolumesDir: volumesDir,
 		Version: os.Getenv("CA_APPLIANCE_VERSION"), Keep: 2,
@@ -49,34 +50,18 @@ func startStorage(ctx context.Context) {
 	c := storage.NewController(storage.KubectlKube{Kubeconfig: "/etc/rancher/k3s/k3s.yaml"}, storage.NewBtrfsFS(), volumesDir, snapshotsDir)
 	c.Log = func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) }
 	go c.Run(ctx, 4*time.Second)
-	go diagnoseLayout()
 }
 
-// diagnoseLayout writes the state of the node directory and its symlink to the
-// console, so a boot failure there is visible in the diagnostics. Temporary.
-func diagnoseLayout() {
-	time.Sleep(20 * time.Second)
-	f, err := os.OpenFile("/dev/console", os.O_WRONLY, 0)
-	if err != nil {
+// linkJournal points /var/log/journal at the journal on the data disk before the
+// journal is flushed, so the guest's logs persist without tmpfiles having to run first.
+func linkJournal(varLib string) {
+	target := filepath.Join(varLib, "containers-anywhere", "journal")
+	if _, err := os.Lstat("/var/log/journal"); err == nil {
 		return
 	}
-	defer f.Close()
-	for _, p := range []string{"/etc/rancher/node", "/var/lib/rancher/node", "/var/lib/rancher", "/var/lib/rancher/k3s", "/var/lib"} {
-		li, lerr := os.Lstat(p)
-		si, serr := os.Stat(p)
-		fmt.Fprintf(f, "ca-diag %s lstat=%v/%v stat=%v/%v\n", p, modeOf(li), lerr, modeOf(si), serr)
-	}
-	for _, dir := range []string{"/var/lib", "/var/lib/rancher"} {
-		entries, _ := os.ReadDir(dir)
-		for _, e := range entries {
-			fmt.Fprintf(f, "ca-diag ls %s\n", filepath.Join(dir, e.Name()))
+	if err := os.MkdirAll("/var/log", 0o755); err == nil {
+		if err := os.Symlink(target, "/var/log/journal"); err != nil {
+			fmt.Fprintln(os.Stderr, "journal link:", err)
 		}
 	}
-}
-
-func modeOf(i os.FileInfo) string {
-	if i == nil {
-		return "-"
-	}
-	return i.Mode().String()
 }

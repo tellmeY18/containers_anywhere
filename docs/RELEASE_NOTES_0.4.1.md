@@ -1,7 +1,11 @@
-# Containers Anywhere 0.4.0 (beta)
+# Containers Anywhere 0.4.1 (beta)
 
-Beta, not production-ready. App and appliance both change. **There is no migration from 0.3.x:**
-the data disk is now btrfs, so 0.4.0 needs a new empty state directory. Use disposable data.
+Beta, not production-ready. App and appliance both change.
+
+**Do not use `appliance-v0.4.0`.** It shipped with a systemd ordering cycle that could make systemd skip
+`systemd-tmpfiles-setup` at boot, so K3s's publication and storage definitions were never created. GitHub
+releases are immutable, so it cannot be withdrawn; 0.4.1 fixes it and is the first usable 0.4 release. **There is no migration from 0.3.x:**
+the data disk is now btrfs, so 0.4.x needs a new empty state directory. Use disposable data.
 
 ## What's new
 
@@ -32,4 +36,4 @@ Treat this release as an experiment on disposable data.
 
 ## Compatibility
 
-None with earlier versions: 0.4.0 needs a new empty state directory, and there is no migration.
+None with earlier versions: 0.4.x needs a new empty state directory, and there is no migration.
