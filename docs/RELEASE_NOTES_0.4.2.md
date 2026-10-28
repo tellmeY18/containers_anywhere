@@ -1,7 +1,7 @@
-# Containers Anywhere 0.5.0 (beta)
+# Containers Anywhere 0.4.2 (beta)
 
 Beta, not production-ready. App and appliance both change. **Use this instead of 0.4.0 and 0.4.1,
-which are broken on a fresh install.** Like them it needs a new empty state directory; there is no migration.
+which are broken on a fresh install.** Like them it needs a new empty state directory; there is no migration. (0.4.0 and 0.4.1 could not run on a fresh install, so replacing their storage types with the standard ones is not a compatibility break for anyone.)
 
 ## Storage is now a standard Kubernetes CSI driver, run by the app
 
@@ -54,4 +54,4 @@ Found by booting 0.4.1 on a Mac (Apple Virtualization.framework, arm64) and insp
 On the Mac (arm64, Virtualization.framework), by hand: a scrub (clean), 4 KiB random writes with fsync and write-verify
 (0 errors), three hard kills of the VM (every fsynced file intact; unsynced files present but empty), then the driver
 itself: 19 file operations on copy-on-write and no-COW volumes, quota enforcement, expansion, snapshot, restore and
-clone. The integrated 0.5.0 build is covered by unit tests and the CI boot only; the full end-to-end suite did not run.
+clone. The integrated 0.4.2 build is covered by unit tests and the CI boot only; the full end-to-end suite did not run.
