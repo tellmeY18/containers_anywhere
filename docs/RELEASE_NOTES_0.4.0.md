@@ -22,6 +22,14 @@ the data disk is now btrfs, so 0.4.0 needs a new empty state directory. Use disp
 
 ## Verification
 
-Unit tests and builds only. The appliance boots in CI on Linux/KVM only if that run was made; the full
-end-to-end suite did not run. The btrfs behaviour under a full disk, repeated crashes, and database
-load has not been tested, and macOS and Windows boots are unproven.
+Unit tests and builds pass. In CI the appliance boots to healthy on Linux/KVM (AMD64): the btrfs
+template and mounts, the online grow from 256 MiB to 8 GiB, K3s and the Kite console. **Not exercised on a
+real cluster:** the volume provisioner (the platform's own workloads use no claims), the snapshot API and
+schedules, clone-restore, the restore point on a version change, disk growth through a host request, and the
+one-tap update. The full end-to-end suite did not run. macOS, Windows and Linux ARM64 boots are unproven.
+btrfs behaviour under a full disk, repeated crashes and database load has not been tested.
+Treat this release as an experiment on disposable data.
+
+## Compatibility
+
+None with earlier versions: 0.4.0 needs a new empty state directory, and there is no migration.
