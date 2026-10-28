@@ -25,7 +25,7 @@ btrfs ioctls and mount propagation): a compromise of it is root on the node.
 | (nested) | `btrfs-csi-pool`, bind-mounted at `/var/lib/btrfs-csi/default` | the CSI pool: `volumes/<id>`, `snapshots/<id>`, `state.json` | volumes yes, copied explicitly |
 | `@snapshots` | `/run/ca/snapshots` | appliance restore points | n/a |
 
-`@snapshots` is mounted outside `/var/lib` and is never visible to a pod. The disk starts at 8 GiB (sparse) and grows
+`@snapshots` is mounted outside `/var/lib` and is never visible to a pod. The disk starts at 100 GiB (sparse: the host only uses what is written) and can grow to 256 GiB
 through a host request; it never shrinks. A monthly `btrfs scrub` checks it.
 
 ## Using it
@@ -82,8 +82,8 @@ cluster database are never touched.
 ## Growing the disk
 
 The data disk is a **sparse file** on the host: its size is a ceiling, and the host only uses the blocks the VM has actually
-written. A fresh disk is 8 GiB (set by the appliance bundle). A `HostRequest` of type `resources` may carry `diskGiB`
-(8 to **100**, the current ceiling). After a launcher approval, the next start extends the file (refused if the computer has
+written. A fresh disk is **100 GiB** (set by the appliance bundle). A `HostRequest` of type `resources` may carry `diskGiB`
+(up to **256**, the current ceiling). After a launcher approval, the next start extends the file (refused if the computer has
 less free space than the growth) and the guest enlarges the filesystem when it mounts it. It never shrinks.
 
 Where each part lives: the starting size is the **appliance's** (`data_bytes` in its manifest); growing the file is the **app's**

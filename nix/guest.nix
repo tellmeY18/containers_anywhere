@@ -81,7 +81,7 @@ in
     # -Ededupe forces single-threaded compression in the pinned microvm builder.
     # Retain LZ4HC density and tail packing while allowing parallel construction.
     storeDiskErofsFlags = [ "-zlz4hc" "-Eztailpacking" "-Efragments" ];
-    volumes = [{ image = "data.img"; mountPoint = "/var/lib"; size = 8192; fsType = "btrfs"; autoCreate = false; }];
+    volumes = [{ image = "data.img"; mountPoint = "/var/lib"; size = 102400; fsType = "btrfs"; autoCreate = false; }];
   };
   # One btrfs holds everything. @system is /var/lib; the nested subvolumes for
   # container images, logs and volumes are created by the agent. @snapshots sits

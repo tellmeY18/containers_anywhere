@@ -117,7 +117,7 @@ spec:
                     diskGiB:
                       type: integer
                       minimum: 8
-                      maximum: 100
+                      maximum: 256
                       description: Optional. Grows the data disk at the next start; it never shrinks.
                 power:
                   type: object

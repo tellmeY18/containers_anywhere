@@ -151,9 +151,10 @@ func updateDataCompatible(old, next manifest) error {
 	identical, upgrade := k3sChange(old.K3s, next.K3s)
 	if old.Arch != runtime.GOARCH || next.Arch != old.Arch ||
 		old.DataContract != protocol.DataContract || next.DataContract != old.DataContract ||
-		!(identical || upgrade) ||
-		old.DataBytes != next.DataBytes {
-		return errors.New("unsupported data contract: this update requires var-lib-btrfs-v1, the same K3s minor version (patch releases may only move forward), architecture and disk geometry; reset required for unsupported changes: use a new empty state directory, never delete existing data")
+		!(identical || upgrade) {
+		// data_bytes is only the size a NEW disk starts at. A disk grows on request, so a cluster's
+		// real size is not in either manifest and an appliance may change its starting size.
+		return errors.New("unsupported data contract: this update requires var-lib-btrfs-v1, the same K3s minor version (patch releases may only move forward) and architecture; reset required for unsupported changes: use a new empty state directory, never delete existing data")
 	}
 	return nil
 }

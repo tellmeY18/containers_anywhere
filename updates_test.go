@@ -152,3 +152,18 @@ func TestAnApplianceWithoutTheHostAPIStillRunsAndCanBeUpdated(t *testing.T) {
 		t.Fatal("the new appliance advertises the host API")
 	}
 }
+
+func TestAnUpdateMayChangeTheStartingDiskSize(t *testing.T) {
+	old := manifest{Product: "containers-anywhere", Version: "0.4.2", Arch: runtime.GOARCH, Format: 3, Protocol: 1, DataBytes: 8 << 30,
+		Kernel: "kernel", Initrd: "initrd", System: "x", Files: map[string]string{"kernel": "a", "initrd": "b", "system.img": "c", "data.img": "d"},
+		Capabilities: protocol.Capabilities(), DataContract: protocol.DataContract, K3s: "1.35.8+k3s1"}
+	next := old
+	next.Version, next.DataBytes = "0.4.3", 100<<30
+	if err := updateDataCompatible(old, next); err != nil {
+		t.Fatalf("a bigger starting size must not block an update: %v", err)
+	}
+	next.DataBytes = maxDataDiskBytes + 1
+	if err := updateDataCompatible(old, next); err == nil {
+		t.Fatal("a disk above the ceiling must be refused")
+	}
+}

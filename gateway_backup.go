@@ -66,7 +66,7 @@ func validBackupMember(name string, size int64) bool {
 	}
 	switch name {
 	case "data.img":
-		return size <= 64<<30
+		return size <= maxDataDiskBytes
 	case "release.json", "gateway.json":
 		return size <= 1<<20
 	default:

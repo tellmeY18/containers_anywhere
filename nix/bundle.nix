@@ -24,7 +24,7 @@ in pkgs.runCommand "containers-anywhere-bundle" { nativeBuildInputs = [ pkgs.btr
       product='containers-anywhere', version='${pkgs.lib.removeSuffix "\n" (builtins.readFile ../APPLIANCE_VERSION)}', format=3, protocol=1,
       capabilities=['status', 'logs', 'stop', 'console-proxy', 'platform-apply-v1', 'workload-publication-v1', 'host-api-v1', 'storage-v1'],
       data_contract='var-lib-btrfs-v1',
-      data_bytes=8*1024**3, arch='${if pkgs.stdenv.hostPlatform.isAarch64 then "arm64" else "amd64"}',
+      data_bytes=100*1024**3, arch='${if pkgs.stdenv.hostPlatform.isAarch64 then "arm64" else "amd64"}',
       kernel='kernel', initrd='initrd', system='${cfg.system.build.toplevel}', files=files,
       k3s='${cfg.services.k3s.package.version}'), indent=2))
   PY

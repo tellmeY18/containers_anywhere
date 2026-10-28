@@ -24,7 +24,7 @@ const (
 	MinMemoryMiB = 2048
 	MaxMemoryMiB = 256 << 10
 	MinDiskGiB   = 8
-	MaxDiskGiB   = 100 // the ceiling for now; see docs/STORAGE.md on making it a launcher setting
+	MaxDiskGiB   = 256 // the ceiling for now; see docs/STORAGE.md on making it a launcher setting
 	MinCPUs      = 2
 	MaxCPUs      = 64
 )

@@ -60,7 +60,7 @@ Private keys are never exposed.
 
 | `spec.type` | Parameters | Effect once approved |
 | --- | --- | --- |
-| `resources` | `cpus` 2–64, `memoryMiB` 2048–262144, optional `diskGiB` 8–100 | Saved as the size for the **next start**. Refused if it would oversubscribe the host. `diskGiB` grows the data disk at the next start (the host needs that much free space); it never shrinks and the disk is never recreated. |
+| `resources` | `cpus` 2–64, `memoryMiB` 2048–262144, optional `diskGiB` 8–256 | Saved as the size for the **next start**. Refused if it would oversubscribe the host. `diskGiB` grows the data disk at the next start (the host needs that much free space); it never shrinks and the disk is never recreated. |
 | `power` | `action`: `shutdown` or `restart-appliance` | Recorded as Applied **before** it acts, then runs. Never replayed after a launcher restart. |
 | `autostart` | `enabled` | Installs or removes the per-user launch entry. |
 | `prune-images` | none | `crictl rmi --prune` in the guest: unreferenced images only, never volumes. Reports bytes reclaimed. |
