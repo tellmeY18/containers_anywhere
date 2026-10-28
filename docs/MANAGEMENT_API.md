@@ -31,8 +31,7 @@ and the host is reachable through the Kubernetes API. Managers never get a bespo
 | `host.containersanywhere.dev` | `HostDestination` (read-only status; S3-compatible endpoint with separate writer and reader secrets) | planned, #14 |
 | `host.containersanywhere.dev` | `HostRecoveryPoint`, `HostBackupSchedule` | planned, #15 |
 | `host.containersanywhere.dev` | `HostQuiesceHook`, `HostRestorePlan`, `HostRestoreDrill` | planned, #16 |
-| `host.containersanywhere.dev` | `HostPowerRequest`, `HostStatus.autostart` | planned, #17 |
-| `host.containersanywhere.dev` | `HostLogs`, size accounting in `HostStatus`, prune request | planned, #18 |
+| `host.containersanywhere.dev` | `HostRequest` types `power`, `autostart`, `prune-images`; `HostStatus` autostart, logs and storage accounting | **built** in 0.3.0; #17 and #18 stay open only for unverified acceptance (tracked in #20) |
 | `host.containersanywhere.dev` | `HostUpdate` (prepare a candidate; activation stays launcher-only) | planned, #20 |
 | storage | `VolumeAttributesClass`; ceiling, current size and host free space in `HostStatus` | planned |
 
