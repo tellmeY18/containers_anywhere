@@ -81,9 +81,30 @@ cluster database are never touched.
 
 ## Growing the disk
 
-A `HostRequest` of type `resources` may carry `diskGiB` (8 to 256). After a launcher approval, the next start extends the
-sparse image (refused if the computer lacks that much free space) and the guest enlarges the filesystem when it mounts it.
-It never shrinks.
+The data disk is a **sparse file** on the host: its size is a ceiling, and the host only uses the blocks the VM has actually
+written. A fresh disk is 8 GiB (set by the appliance bundle). A `HostRequest` of type `resources` may carry `diskGiB`
+(8 to **100**, the current ceiling). After a launcher approval, the next start extends the file (refused if the computer has
+less free space than the growth) and the guest enlarges the filesystem when it mounts it. It never shrinks.
+
+Where each part lives: the starting size is the **appliance's** (`data_bytes` in its manifest); growing the file is the **app's**
+(the launcher, on approval); enlarging the filesystem is the **appliance's** (at boot); and the ceiling is a constant compiled
+into the app and the guest (`MaxDiskGiB`) and mirrored in the HostRequest schema in `platform/hostapi.yaml`.
+
+Things to know: host usage only grows (deleted data inside the VM is not guaranteed to shrink the file); backups and copies
+do not preserve sparseness yet, so a backup writes the full apparent size; and Finder, Time Machine and cloud sync can see
+the apparent size.
+
+### Direction for production (not built)
+
+- **Ceiling as a launcher setting**, chosen by the person who owns the computer (stored with the cluster state, edited in the
+  panel with a confirmation), with a high hard cap in code. Workloads can only request growth inside it.
+- **A host-free floor**: refuse growth if it would leave the host below a reserve (for example 10% or 20 GiB), not only if the
+  growth does not fit.
+- **Optional reservation**: preallocate the space (macOS `F_PREALLOCATE`, Linux `fallocate`, Windows allocated size) so the VM can
+  never run the host out of space, at the cost of using it immediately. Thin (sparse) stays the default.
+- **Request more, approve in the launcher**: keep the existing `HostRequest` flow; surface ceiling, current size and host free
+  space in `HostStatus` so a manager like CNCM can show real headroom.
+- Sparse-aware backup and copy.
 
 ## Limits and risks
 
