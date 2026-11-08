@@ -21,6 +21,7 @@ and normal-update data preservation are not excluded by that policy.
 
 [Download the beta](https://github.com/tellmeY18/containers_anywhere/releases/tag/app-v0.1.0)
 · [Recovery architecture](docs/DISASTER_RECOVERY.md)
+· [Kubernetes-managed recovery](docs/RECOVERY.md)
 · [Roadmap](ROADMAP.md)
 · [Appliance optimization](docs/APPLIANCE.md)
 · [Workload gateway setup](docs/NETWORKING.md)

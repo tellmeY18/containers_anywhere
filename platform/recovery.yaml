@@ -1,0 +1,452 @@
+# App-delivered API. Reconciled by the native host app over the authenticated
+# guest channel; no image, Deployment, host token or workload grant is installed.
+# Retain is essential: namespace deletion must not destroy recovery data.
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: recovery-btrfs
+driver: btrfs.csi.local
+deletionPolicy: Retain
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: protectionpolicies.recovery.containersanywhere.dev
+spec:
+  group: recovery.containersanywhere.dev
+  scope: Namespaced
+  names: {plural: protectionpolicies, singular: protectionpolicy, kind: ProtectionPolicy}
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources: {status: {}}
+      additionalPrinterColumns:
+        - {name: Phase, type: string, jsonPath: .status.phase}
+        - {name: LastScheduled, type: date, jsonPath: .status.lastSchedule}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            apiVersion: {type: string}
+            kind: {type: string}
+            metadata: {type: object}
+            spec:
+              type: object
+              required: [schedule, keepLast, capture]
+              x-kubernetes-validations:
+                - {rule: '!has(self.scope)', message: 'Namespaced policies cannot specify cluster scope.'}
+              properties:
+                scope: {type: string, maxLength: 16}
+                schedule: {type: string, minLength: 9, maxLength: 128, pattern: '^[0-9*/,-]+( +[0-9*/,-]+){4}$', description: 'Numeric five-field UTC cron. Minimum interval 15 minutes; missed runs coalesce within 24 hours.'}
+                suspend: {type: boolean, default: false}
+                keepLast: {type: integer, minimum: 1, maximum: 100, description: 'Keep newest successful sets; journaled pruning excludes failed, export-pending and restore-protected sets.'}
+                destination: {type: string, minLength: 1, maxLength: 253, pattern: '^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'}
+                capture:
+                  type: object
+                  required: [selector, expectedPVCs, consistency, timeoutSeconds]
+                  x-kubernetes-validations:
+                    - rule: "self.consistency != 'QuiescedGroup' || (has(self.hooks) && size(self.hooks) > 0)"
+                      message: QuiescedGroup requires explicit prepare, resume and check hooks.
+                    - rule: "self.consistency != 'PerPVC' || !has(self.hooks) || size(self.hooks) == 0"
+                      message: PerPVC does not run quiesce hooks.
+                  properties:
+                    selector:
+                      type: object
+                      required: [matchLabels]
+                      properties:
+                        matchLabels:
+                          type: object
+                          minProperties: 1
+                          maxProperties: 16
+                          additionalProperties: {type: string, maxLength: 63}
+                    expectedPVCs:
+                      type: array
+                      minItems: 1
+                      maxItems: 64
+                      x-kubernetes-list-type: set
+                      items: {type: string, minLength: 1, maxLength: 253, pattern: '^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'}
+                    consistency: {type: string, enum: [PerPVC, QuiescedGroup], description: 'QuiescedGroup is sequential snapshots while hooks hold writes, not atomic group capture.'}
+                    timeoutSeconds: {type: integer, minimum: 10, maximum: 300, default: 120}
+                    hooks:
+                      type: array
+                      maxItems: 16
+                      items:
+                        type: object
+                        required: [pod, container, prepare, resume, check, timeoutSeconds]
+                        properties:
+                          pod: {type: string, minLength: 1, maxLength: 253, pattern: '^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'}
+                          container: {type: string, minLength: 1, maxLength: 63, pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'}
+                          timeoutSeconds: {type: integer, minimum: 1, maximum: 30, default: 10}
+                          prepare: &policyCommand
+                            type: array
+                            minItems: 1
+                            maxItems: 32
+                            items: {type: string, maxLength: 4096}
+                          resume: *policyCommand
+                          check: *policyCommand
+                    configResources:
+                      type: array
+                      maxItems: 32
+                      items:
+                        type: object
+                        required: [kind, name]
+                        properties:
+                          kind: {type: string, enum: [ConfigMap]}
+                          name: {type: string, minLength: 1, maxLength: 253, pattern: '^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'}
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: recoverypoints.recovery.containersanywhere.dev
+spec:
+  group: recovery.containersanywhere.dev
+  scope: Namespaced
+  names: {plural: recoverypoints, singular: recoverypoint, kind: RecoveryPoint}
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources: {status: {}}
+      additionalPrinterColumns:
+        - {name: Phase, type: string, jsonPath: .status.phase}
+        - {name: Consistency, type: string, jsonPath: .status.consistency}
+        - {name: Reason, type: string, jsonPath: .status.reason}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            apiVersion: {type: string}
+            kind: {type: string}
+            metadata: {type: object}
+            spec:
+              type: object
+              required: [capture]
+              x-kubernetes-validations:
+                - {rule: 'self == oldSelf', message: 'RecoveryPoint spec is immutable; create a new request.'}
+                - {rule: '!has(self.scope)', message: 'Namespaced recovery points cannot specify cluster scope.'}
+              properties:
+                scope: {type: string, maxLength: 16}
+                policyUID: {type: string, maxLength: 128, pattern: '^[a-zA-Z0-9][a-zA-Z0-9-]*$'}
+                scheduledAt: {type: string, format: date-time}
+                destination: {type: string, minLength: 1, maxLength: 253, pattern: '^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'}
+                capture:
+                  type: object
+                  required: [selector, expectedPVCs, consistency, timeoutSeconds]
+                  x-kubernetes-validations:
+                    - rule: "self.consistency != 'QuiescedGroup' || (has(self.hooks) && size(self.hooks) > 0)"
+                      message: QuiescedGroup requires explicit prepare, resume and check hooks.
+                    - rule: "self.consistency != 'PerPVC' || !has(self.hooks) || size(self.hooks) == 0"
+                      message: PerPVC does not run quiesce hooks.
+                  properties:
+                    selector:
+                      type: object
+                      required: [matchLabels]
+                      properties:
+                        matchLabels:
+                          type: object
+                          minProperties: 1
+                          maxProperties: 16
+                          additionalProperties: {type: string, maxLength: 63}
+                    expectedPVCs:
+                      type: array
+                      minItems: 1
+                      maxItems: 64
+                      x-kubernetes-list-type: set
+                      items: {type: string, minLength: 1, maxLength: 253, pattern: '^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'}
+                    consistency: {type: string, enum: [PerPVC, QuiescedGroup], description: 'Sequential CSI snapshots, never atomic group capture.'}
+                    timeoutSeconds: {type: integer, minimum: 10, maximum: 300, default: 120}
+                    hooks:
+                      type: array
+                      maxItems: 16
+                      items:
+                        type: object
+                        required: [pod, container, prepare, resume, check, timeoutSeconds]
+                        properties:
+                          pod: {type: string, minLength: 1, maxLength: 253, pattern: '^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'}
+                          container: {type: string, minLength: 1, maxLength: 63, pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'}
+                          timeoutSeconds: {type: integer, minimum: 1, maximum: 30, default: 10}
+                          prepare: &pointCommand
+                            type: array
+                            minItems: 1
+                            maxItems: 32
+                            items: {type: string, maxLength: 4096}
+                          resume: *pointCommand
+                          check: *pointCommand
+                    configResources:
+                      type: array
+                      maxItems: 32
+                      items:
+                        type: object
+                        required: [kind, name]
+                        properties:
+                          kind: {type: string, enum: [ConfigMap]}
+                          name: {type: string, minLength: 1, maxLength: 253, pattern: '^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'}
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: restorerequests.recovery.containersanywhere.dev
+spec:
+  group: recovery.containersanywhere.dev
+  scope: Namespaced
+  names: {plural: restorerequests, singular: restorerequest, kind: RestoreRequest}
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources: {status: {}}
+      additionalPrinterColumns:
+        - {name: Phase, type: string, jsonPath: .status.phase}
+        - {name: Reason, type: string, jsonPath: .status.reason}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            apiVersion: {type: string}
+            kind: {type: string}
+            metadata: {type: object}
+            spec:
+              type: object
+              required: [pvcNames]
+              x-kubernetes-validations:
+                - {rule: 'self == oldSelf', message: 'RestoreRequest spec is immutable; create a new request.'}
+                - {rule: '!has(self.scope) && !has(self.recoveryPointID)', message: 'Namespaced restores cannot specify cluster scope or cluster recoveryPointID.'}
+                - rule: "has(self.durablePointID) ? (!has(self.recoveryPoint) && !has(self.recoveryPointUID)) : (has(self.recoveryPoint) && has(self.recoveryPointUID))"
+                  message: Choose exactly one imported durable point or local RecoveryPoint name and UID pair.
+              properties:
+                scope: {type: string, maxLength: 16}
+                recoveryPointID: {type: string, maxLength: 128}
+                durablePointID: {type: string, minLength: 1, maxLength: 128, pattern: '^[a-zA-Z0-9][a-zA-Z0-9-]*$', description: 'Imported workload point ID. Adapter verifies source namespace and fresh empty target claims.'}
+                recoveryPoint: {type: string, minLength: 1, maxLength: 253, pattern: '^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'}
+                recoveryPointUID: {type: string, minLength: 1, maxLength: 128, pattern: '^[a-zA-Z0-9][a-zA-Z0-9-]*$'}
+                pvcNames:
+                  type: object
+                  minProperties: 1
+                  maxProperties: 64
+                  additionalProperties: {type: string, minLength: 1, maxLength: 253, pattern: '^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'}
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clusterprotectionpolicies.recovery.containersanywhere.dev
+spec:
+  group: recovery.containersanywhere.dev
+  scope: Cluster
+  names: {plural: clusterprotectionpolicies, singular: clusterprotectionpolicy, kind: ClusterProtectionPolicy}
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources: {status: {}}
+      additionalPrinterColumns:
+        - {name: Phase, type: string, jsonPath: .status.phase}
+        - {name: LastScheduled, type: date, jsonPath: .status.lastSchedule}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            apiVersion: {type: string}
+            kind: {type: string}
+            metadata: {type: object}
+            spec:
+              type: object
+              required: [scope, schedule, keepLast]
+              properties:
+                scope: {type: string, enum: [system, full]}
+                schedule: {type: string, minLength: 9, maxLength: 128, pattern: '^[0-9*/,-]+( +[0-9*/,-]+){4}$'}
+                suspend: {type: boolean, default: false}
+                keepLast: {type: integer, minimum: 1, maximum: 100, description: 'Journaled pruning preserves newest complete and protected points independently per scope.'}
+                destination: {type: string, minLength: 1, maxLength: 253, pattern: '^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'}
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clusterrecoverypoints.recovery.containersanywhere.dev
+spec:
+  group: recovery.containersanywhere.dev
+  scope: Cluster
+  names: {plural: clusterrecoverypoints, singular: clusterrecoverypoint, kind: ClusterRecoveryPoint}
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources: {status: {}}
+      additionalPrinterColumns:
+        - {name: Phase, type: string, jsonPath: .status.phase}
+        - {name: Reason, type: string, jsonPath: .status.reason}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            apiVersion: {type: string}
+            kind: {type: string}
+            metadata: {type: object}
+            spec:
+              type: object
+              x-kubernetes-validations:
+                - {rule: 'self == oldSelf', message: 'ClusterRecoveryPoint spec is immutable.'}
+              required: [scope]
+              properties:
+                scope: {type: string, enum: [system, full]}
+                policyUID: {type: string, maxLength: 128, pattern: '^[a-zA-Z0-9][a-zA-Z0-9-]*$'}
+                scheduledAt: {type: string, format: date-time}
+                destination: {type: string, minLength: 1, maxLength: 253, pattern: '^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'}
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clusterrestorerequests.recovery.containersanywhere.dev
+spec:
+  group: recovery.containersanywhere.dev
+  scope: Cluster
+  names: {plural: clusterrestorerequests, singular: clusterrestorerequest, kind: ClusterRestoreRequest}
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources: {status: {}}
+      additionalPrinterColumns:
+        - {name: Phase, type: string, jsonPath: .status.phase}
+        - {name: Reason, type: string, jsonPath: .status.reason}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            apiVersion: {type: string}
+            kind: {type: string}
+            metadata: {type: object}
+            spec:
+              type: object
+              required: [scope]
+              x-kubernetes-validations:
+                - {rule: 'self == oldSelf', message: 'ClusterRestoreRequest spec is immutable.'}
+                - rule: "has(self.durablePointID) ? (!has(self.recoveryPointID) && !has(self.recoveryPoint) && !has(self.recoveryPointUID)) : (has(self.recoveryPointID) ? (!has(self.recoveryPoint) && !has(self.recoveryPointUID)) : (has(self.recoveryPoint) && has(self.recoveryPointUID)))"
+                  message: Choose exactly one durablePointID, recoveryPointID, or local RecoveryPoint name and UID pair.
+              properties:
+                scope: {type: string, enum: [system, full]}
+                durablePointID: {type: string, minLength: 1, maxLength: 128, pattern: '^[a-zA-Z0-9][a-zA-Z0-9-]*$', description: 'Imported engine point ID; backend validates immutable manifest scope.'}
+                recoveryPointID: {type: string, minLength: 1, maxLength: 128, pattern: '^[a-zA-Z0-9][a-zA-Z0-9-]*$', description: 'Direct engine point ID; mutually exclusive with durablePointID and local CR references.'}
+                recoveryPoint: {type: string, minLength: 1, maxLength: 253, pattern: '^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'}
+                recoveryPointUID: {type: string, minLength: 1, maxLength: 128, pattern: '^[a-zA-Z0-9][a-zA-Z0-9-]*$'}
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: backupdestinations.recovery.containersanywhere.dev
+spec:
+  group: recovery.containersanywhere.dev
+  scope: Cluster
+  names: {plural: backupdestinations, singular: backupdestination, kind: BackupDestination}
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources: {status: {}}
+      additionalPrinterColumns:
+        - {name: Provider, type: string, jsonPath: .spec.provider}
+        - {name: Ready, type: string, jsonPath: '.status.conditions[?(@.type=="Ready")].status'}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            apiVersion: {type: string}
+            kind: {type: string}
+            metadata: {type: object}
+            spec:
+              type: object
+              required: [provider]
+              x-kubernetes-validations:
+                - rule: "self.provider != 'HostDirectory' || (has(self.hostDirectoryID) && !has(self.endpoint) && !has(self.bucket) && !has(self.prefix) && !has(self.credentialsSecretRef))"
+                  message: HostDirectory uses only an opaque enrolled ID, never a host path or remote credentials.
+                - rule: "self.provider == 'HostDirectory' || !has(self.hostDirectoryID)"
+                  message: Remote destinations cannot reference a host directory.
+              properties:
+                provider: {type: string, enum: [HostDirectory, S3Compatible, AzureBlob, GCS, SFTP, RepositoryService]}
+                allowedNamespaces:
+                  type: array
+                  maxItems: 64
+                  x-kubernetes-list-type: set
+                  description: 'Explicit namespaces allowed to request export. Empty means cluster requests only; no wildcard.'
+                  items: {type: string, minLength: 1, maxLength: 63, pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'}
+                hostDirectoryID: {type: string, minLength: 1, maxLength: 128, pattern: '^[a-zA-Z0-9][a-zA-Z0-9-]*$'}
+                endpoint: {type: string, maxLength: 2048, pattern: '^(https|sftp)://[^@]+$', description: 'No embedded credentials. Execution is NotImplemented for remote providers.'}
+                bucket: {type: string, maxLength: 256}
+                prefix: {type: string, maxLength: 1024}
+                credentialsSecretRef:
+                  type: object
+                  required: [namespace, name]
+                  properties:
+                    namespace: {type: string, minLength: 1, maxLength: 63, pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'}
+                    name: {type: string, minLength: 1, maxLength: 253, pattern: '^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'}
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  maxItems: 16
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [type]
+                  items:
+                    type: object
+                    required: [type, status, reason, message]
+                    properties:
+                      type: {type: string, maxLength: 64}
+                      status: {type: string, enum: ['True', 'False', Unknown]}
+                      reason: {type: string, maxLength: 128}
+                      message: {type: string, maxLength: 4096}
+---
+# Unbound roles only. No workload obtains access by installing this manifest.
+# Bind namespaced-requester with a RoleBinding after separately granting the
+# recovery-workload service account the specific workload operations it needs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: containers-recovery-namespaced-requester
+rules:
+  - apiGroups: [recovery.containersanywhere.dev]
+    resources: [protectionpolicies, recoverypoints, restorerequests]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: containers-recovery-cluster-requester
+rules:
+  - apiGroups: [recovery.containersanywhere.dev]
+    resources: [clusterprotectionpolicies, clusterrecoverypoints, clusterrestorerequests, backupdestinations]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: containers-recovery-observer
+rules:
+  - apiGroups: [recovery.containersanywhere.dev]
+    resources: [protectionpolicies, recoverypoints, restorerequests, clusterprotectionpolicies, clusterrecoverypoints, clusterrestorerequests, backupdestinations]
+    verbs: [get, list, watch]

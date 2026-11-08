@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tellmeY18/containers_anywhere/internal/recovery"
 	"github.com/tellmeY18/containers_anywhere/internal/storage"
 )
 
@@ -18,22 +19,34 @@ const (
 	snapshotsDir = "/run/ca/snapshots"
 )
 
-// initData runs before the cluster starts. The marker check is the only step that
-// may refuse to boot; the rest report problems on the console and let the appliance
-// come up, because the data is intact either way.
+// initData validates ordinary live data before initializing recovery or changing
+// ownership. Only an already-destructive restore may resume before that check:
+// its partial replacement may not contain a live format marker yet.
 func initData(varLib string) error {
-	// The mount roots must be root-owned before systemd-tmpfiles runs, or it refuses to
-	// create anything beneath them.
-	if err := storage.EnsureRootOwned(varLib, snapshotsDir); err != nil {
-		fmt.Fprintln(os.Stderr, "mount root ownership:", err)
-	}
-	if err := initDataFormat(varLib); err != nil {
-		return err
-	}
-	// A restore that a person asked for in the launcher runs now, before the cluster or anything
-	// else writes to the disk. Only an inconsistent result may refuse to boot.
 	if err := applyPendingRestore(varLib); err != nil {
 		return err
+	}
+	resume, err := recovery.NeedsRestoreResume(filepath.Join(snapshotsDir, "recovery"))
+	if err != nil {
+		return err
+	}
+	if !resume {
+		if err := initDataFormat(varLib); err != nil {
+			return err
+		}
+	}
+	if err := applyPendingRecovery(varLib); err != nil {
+		return err
+	}
+	if resume {
+		if err := initDataFormat(varLib); err != nil {
+			return err
+		}
+	}
+	// Ownership changes also wait for validation. The roots are ready before
+	// systemd-tmpfiles starts, including after a resumed restore.
+	if err := storage.EnsureRootOwned(varLib, snapshotsDir); err != nil {
+		fmt.Fprintln(os.Stderr, "mount root ownership:", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -53,15 +66,6 @@ func initData(varLib string) error {
 		if err := storage.ResetImageCache(varLib); err != nil {
 			fmt.Fprintln(os.Stderr, "image cache reset:", err)
 		}
-	}
-	point, err := storage.TakeRestorePointOnChange(ctx, fs, storage.RestorePointConfig{
-		VarLib: varLib, SnapshotsDir: snapshotsDir, PoolDir: poolDir,
-		Version: os.Getenv("CA_APPLIANCE_VERSION"), K3s: k3sVersion(), Keep: 2,
-	})
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "restore point:", err)
-	} else if point != "" {
-		fmt.Fprintln(os.Stdout, "restore point taken:", point)
 	}
 	return nil
 }

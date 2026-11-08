@@ -1,0 +1,36 @@
+# Cluster-scoped authority: do not delegate this to namespaced workload managers.
+# The host backend owns stop/restart and cold recovery engine transactions.
+apiVersion: recovery.containersanywhere.dev/v1alpha1
+kind: ClusterProtectionPolicy
+metadata:
+  name: nightly-local
+spec:
+  scope: full
+  schedule: '0 3 * * *'
+  keepLast: 3
+---
+apiVersion: recovery.containersanywhere.dev/v1alpha1
+kind: ClusterRecoveryPoint
+metadata:
+  name: manual-cluster-point
+spec:
+  scope: system
+---
+# Apply only when a cold cluster restore is intended. This is not a PVC clone.
+apiVersion: recovery.containersanywhere.dev/v1alpha1
+kind: ClusterRestoreRequest
+metadata:
+  name: restore-cluster-point
+spec:
+  scope: system
+  recoveryPoint: manual-cluster-point
+  recoveryPointUID: REPLACE-WITH-SOURCE-UID
+---
+# A host-imported archive does not require the original Kubernetes capture CR.
+apiVersion: recovery.containersanywhere.dev/v1alpha1
+kind: ClusterRestoreRequest
+metadata:
+  name: restore-imported-full-point
+spec:
+  scope: full
+  durablePointID: REPLACE-WITH-IMPORTED-ENGINE-POINT-ID

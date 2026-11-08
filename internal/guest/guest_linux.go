@@ -36,6 +36,9 @@ func Main() error {
 		listener, err = tls.Listen("tcp", ":8080", config)
 	} else if os.IsNotExist(err) {
 		listener, err = vsock.Listen(8080, nil)
+		if err == nil {
+			listener = &hostVSockListener{Listener: listener}
+		}
 	}
 	if err != nil {
 		return err
@@ -49,6 +52,8 @@ func Main() error {
 	go host.run(context.Background())
 	host.routes(mux)
 	host.restoreRoutes(mux)
+	host.recoveryRoutes(mux)
+	recoveryKubeRoutes(mux)
 	mux.HandleFunc("GET /_agent/logs", func(w http.ResponseWriter, r *http.Request) {
 		cmd := exec.CommandContext(r.Context(), "journalctl", "--no-pager", "-n", "200", "-u", "k3s", "-u", "console-forward", "-u", "containers-agent")
 		cmd.Stdout, cmd.Stderr = w, w

@@ -28,7 +28,7 @@ func guestRestoreCall(ctx context.Context, c *http.Client, method, path string, 
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, errors.New(string(bytes.TrimSpace(out)))
 	}
 	return out, nil

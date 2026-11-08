@@ -160,8 +160,18 @@ func updateDataCompatible(old, next manifest) error {
 }
 
 func updateLock(state string, stop bool) (func(), error) {
+	if err := checkRecoveryIdle(state); err != nil {
+		return nil, err
+	}
 	unlock, err := lockState(state)
-	if err == nil || !stop {
+	if err == nil {
+		if e := checkRecoveryIdle(state); e != nil {
+			unlock()
+			return nil, e
+		}
+		return unlock, nil
+	}
+	if !stop {
 		return unlock, err
 	}
 	c, controlErr := readControl(state)
@@ -174,6 +184,10 @@ func updateLock(state string, stop bool) (func(), error) {
 	deadline := time.Now().Add(180 * time.Second)
 	for time.Now().Before(deadline) {
 		if unlock, err = lockState(state); err == nil {
+			if e := checkRecoveryIdle(state); e != nil {
+				unlock()
+				return nil, e
+			}
 			return unlock, nil
 		}
 		time.Sleep(200 * time.Millisecond)

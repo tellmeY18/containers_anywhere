@@ -1,0 +1,18 @@
+# Namespace and workload PVCs already exist. PVCs must be Bound and labeled
+# recovery-set=example. Grant the explicit RBAC in recovery-rbac.yaml first.
+apiVersion: recovery.containersanywhere.dev/v1alpha1
+kind: ProtectionPolicy
+metadata:
+  name: example-local
+  namespace: example
+spec:
+  schedule: '0 */6 * * *'  # UTC, bounded catch-up; minimum interval 15 minutes.
+  keepLast: 4             # journaled pruning preserves export/restore dependencies
+  capture:
+    selector:
+      matchLabels: {recovery-set: example}
+    expectedPVCs: [data, uploads] # exact set; extra or missing members fail closed
+    consistency: PerPVC
+    timeoutSeconds: 120
+    configResources:
+      - {kind: ConfigMap, name: example-config}

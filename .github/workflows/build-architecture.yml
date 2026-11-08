@@ -29,6 +29,10 @@ on:
         description: Also run the wider acceptance checks (full publication suite, host API and registry trust).
         type: boolean
         default: false
+      recovery:
+        description: Run the opt-in Kubernetes recovery and independent host-backup drill.
+        type: boolean
+        default: false
       reuse_appliance:
         description: App builds download pinned published dependencies; never invoke Nix or stage QEMU.
         type: boolean
@@ -50,7 +54,7 @@ jobs:
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
       - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
         with:
-          primary-key: ca-nix-v3-${{ inputs.system }}-${{ hashFiles('APPLIANCE_VERSION', 'flake.nix', 'flake.lock', 'nix/**', 'cmd/guest/**', 'internal/guest/**', 'internal/boottls/**', 'internal/protocol/**', 'internal/publication/**', 'internal/hostapi/**', 'internal/atomicfile/**', 'go.mod', 'go.sum') }}
+          primary-key: ca-nix-v3-${{ inputs.system }}-${{ hashFiles('APPLIANCE_VERSION', 'flake.nix', 'flake.lock', 'nix/**', 'cmd/guest/**', 'internal/guest/**', 'internal/boottls/**', 'internal/protocol/**', 'internal/publication/**', 'internal/hostapi/**', 'internal/storage/**', 'internal/recovery/**', 'internal/diskspace/**', 'internal/atomicfile/**', 'go.mod', 'go.sum') }}
           restore-prefixes-first-match: |
             ca-nix-v3-${{ inputs.system }}-
             ca-nix-v2-${{ inputs.system }}-
@@ -224,6 +228,7 @@ jobs:
         env:
           PUBLIC_DEPENDENCIES: ${{ inputs.reuse_appliance && !inputs.candidate_artifacts }}
           EXTENDED: ${{ inputs.extended }}
+          RECOVERY: ${{ inputs.recovery }}
         run: |
           runtime=dist/releases/runtime-linux-amd64.tar.gz
           if [ ! -f "$runtime" ]; then runtime=dist/runtime-linux-amd64.tar.gz; fi
@@ -234,6 +239,7 @@ jobs:
           extra=()
           if [ "$PUBLIC_DEPENDENCIES" = true ]; then extra+=(--download); fi
           if [ "$EXTENDED" = true ]; then extra+=(--extended); fi
+          if [ "$RECOVERY" = true ]; then extra+=(--recovery); fi
           if [ -f dist/update-candidate-amd64.tar.gz ]; then
             mkdir -p dist/update-candidate/bundle
             tar -xzf dist/update-candidate-amd64.tar.gz -C dist/update-candidate/bundle

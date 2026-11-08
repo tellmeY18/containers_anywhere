@@ -1,0 +1,14 @@
+# Replace recoveryPointUID with the exact source CR UID, not its name.
+# Creates new PVC declarations only. Binding can wait for a consumer; inspect
+# data, then explicitly reconfigure the workload/operator. No automatic cutover.
+apiVersion: recovery.containersanywhere.dev/v1alpha1
+kind: RestoreRequest
+metadata:
+  name: inspect-before-upgrade
+  namespace: example
+spec:
+  recoveryPoint: before-upgrade
+  recoveryPointUID: REPLACE-WITH-SOURCE-UID
+  pvcNames:
+    data: data-inspect
+    uploads: uploads-inspect

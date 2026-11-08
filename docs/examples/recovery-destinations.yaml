@@ -1,0 +1,24 @@
+# HostDirectory carries an opaque launcher enrollment ID, never a filesystem path.
+# Ready describes host enrollment; it does not assert an export has completed.
+apiVersion: recovery.containersanywhere.dev/v1alpha1
+kind: BackupDestination
+metadata:
+  name: enrolled-drive
+spec:
+  provider: HostDirectory
+  hostDirectoryID: REPLACE-WITH-ENROLLMENT-ID
+  allowedNamespaces: [example]
+---
+# Remote provider schemas are reserved. Ready=False/NotImplemented is truthful;
+# this CR does not upload data or read the referenced credentials.
+apiVersion: recovery.containersanywhere.dev/v1alpha1
+kind: BackupDestination
+metadata:
+  name: future-s3
+spec:
+  provider: S3Compatible
+  allowedNamespaces: [example]
+  endpoint: https://objects.example.invalid
+  bucket: recovery
+  prefix: example
+  credentialsSecretRef: {namespace: example, name: recovery-credentials}

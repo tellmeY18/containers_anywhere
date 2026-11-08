@@ -1,5 +1,8 @@
 # Storage
 
+See [Kubernetes-managed recovery](RECOVERY.md) for the recovery API, coordinated
+system/workload checkpoints and independent host-directory backup design.
+
 The data disk is a single btrfs filesystem. **This is new in 0.4 and has had little testing: use disposable data.**
 There is no migration from earlier versions; start with a new empty state directory.
 

@@ -1,0 +1,14 @@
+# Import and authenticate a HostDirectory export through the host first.
+# This request accepts only imported workload points belonging to namespace
+# example; it cannot restore cluster state. Every target must be a NEW claim.
+# The host adapter verifies fresh empty/unconsumed CSI volumes before population.
+apiVersion: recovery.containersanywhere.dev/v1alpha1
+kind: RestoreRequest
+metadata:
+  name: inspect-imported-point
+  namespace: example
+spec:
+  durablePointID: REPLACE-WITH-IMPORTED-POINT-ID
+  pvcNames:
+    data: imported-data-inspect
+    uploads: imported-uploads-inspect

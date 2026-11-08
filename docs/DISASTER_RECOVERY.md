@@ -1,5 +1,11 @@
 # Disaster recovery architecture
 
+The Btrfs/Kubernetes recovery implementation and its acceptance status are
+described in [Kubernetes-managed recovery](RECOVERY.md). That design distinguishes
+fast in-image snapshots, independent host-directory backups and future remote
+destination adapters. The production recovery requirements below still apply;
+source implementation does not establish completed disaster-recovery acceptance.
+
 **Design status: proposed implementation contract.** Manual encrypted cold backups,
 empty-destination whole-appliance restore, and the
 [explicit current-contract update transaction](UPDATES.md) are implemented in source.

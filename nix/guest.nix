@@ -13,7 +13,9 @@ let
         ../internal/publication
         ../internal/hostapi
         ../internal/storage
+        ../internal/recovery
         ../internal/atomicfile
+        ../internal/diskspace
         ../go.mod
         ../go.sum
       ];
@@ -173,7 +175,7 @@ in
   systemd.services.containers-agent = {
     wantedBy = [ "multi-user.target" ];
     after = [ "local-fs.target" ];
-    path = [ pkgs.systemd config.services.k3s.package pkgs.btrfs-progs pkgs.e2fsprogs ];
+    path = [ pkgs.systemd config.services.k3s.package pkgs.btrfs-progs pkgs.e2fsprogs pkgs.coreutils pkgs.sqlite ];
     environment.CA_APPLIANCE_VERSION = lib.removeSuffix "\n" (builtins.readFile ../APPLIANCE_VERSION);
     environment.CA_K3S_VERSION = config.services.k3s.package.version;
     serviceConfig = { ExecStart = "${agent}/bin/guest guest"; Restart = "on-failure"; };
@@ -188,7 +190,7 @@ in
     after = [ "local-fs.target" ];
     conflicts = [ "shutdown.target" ];
     unitConfig.DefaultDependencies = false;
-    path = [ pkgs.btrfs-progs pkgs.e2fsprogs pkgs.coreutils ];
+    path = [ pkgs.btrfs-progs pkgs.e2fsprogs pkgs.coreutils pkgs.sqlite ];
     environment.CA_APPLIANCE_VERSION = lib.removeSuffix "\n" (builtins.readFile ../APPLIANCE_VERSION);
     environment.CA_K3S_VERSION = config.services.k3s.package.version;
     serviceConfig = {

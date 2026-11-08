@@ -2,14 +2,18 @@ package guest
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"time"
 
+	"github.com/tellmeY18/containers_anywhere/internal/protocol"
+	"github.com/tellmeY18/containers_anywhere/internal/recovery"
 	"github.com/tellmeY18/containers_anywhere/internal/storage"
 )
 
@@ -23,30 +27,17 @@ func copyTree(ctx context.Context, src, dst string) error {
 	return nil
 }
 
-func restoreConfig(varLib string) storage.RestoreConfig {
-	return storage.RestoreConfig{
-		RestorePointConfig: storage.RestorePointConfig{VarLib: varLib, SnapshotsDir: snapshotsDir, PoolDir: poolDir,
-			Version: os.Getenv("CA_APPLIANCE_VERSION"), K3s: k3sVersion(), Keep: 2},
-		Copy: copyTree,
-	}
-}
-
-// applyPendingRestore returns an error only when the disk was left inconsistent. A refused or
-// rolled-back restore is reported on the console and in the last-restore record, and the
-// appliance starts normally on the state that is there.
+// Old-format pending journals cannot prove a complete CSI snapshot capture set.
+// Preserve them and fail closed rather than activate an ambiguous partial restore.
 func applyPendingRestore(varLib string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-	done, err := storage.ApplyPendingRestore(ctx, storage.NewBtrfsFS(), restoreConfig(varLib))
-	switch {
-	case errors.Is(err, storage.ErrStateInconsistent):
-		return err
-	case err != nil:
-		fmt.Fprintln(os.Stderr, "restore:", err)
-	case done:
-		fmt.Fprintln(os.Stdout, "the requested restore completed")
+	_, err := os.Lstat(filepath.Join(snapshotsDir, "pending-restore.json"))
+	if os.IsNotExist(err) {
+		return nil
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("unsupported old restore journal preserved in %s; use its matching appliance or a new state directory", snapshotsDir)
 }
 
 // restoreRoutes lets the launcher list restore points and ask for one. Asking changes nothing
@@ -54,22 +45,66 @@ func applyPendingRestore(varLib string) error {
 func (g *guestHostAPI) restoreRoutes(mux *http.ServeMux) {
 	version := func() string { return os.Getenv("CA_APPLIANCE_VERSION") }
 	mux.HandleFunc("GET /_agent/storage/restore-points", func(w http.ResponseWriter, r *http.Request) {
-		points, err := storage.ListRestorePoints(snapshotsDir, version(), k3sVersion())
+		e, err := recoveryEngine("/var/lib", false)
+		if err != nil {
+			http.Error(w, err.Error(), 503)
+			return
+		}
+		catalog, err := e.List()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
 		}
-		last, _ := storage.LastRestore(snapshotsDir)
+		points := []storage.RestorePoint{}
+		for _, m := range catalog {
+			if m.Scope == "workload" {
+				continue
+			}
+			compatible := m.Appliance == version() && m.Datastore.K3s == k3sVersion() && m.Architecture == runtime.GOARCH && m.DataFormat == protocol.DataContract
+			reason := ""
+			if !compatible {
+				reason = "requires the exact appliance, K3s, architecture and data format recorded by this point"
+			}
+			points = append(points, storage.RestorePoint{ID: m.ID, From: m.Appliance, To: m.Appliance, K3s: m.Datastore.K3s, Label: m.Scope, CreatedAt: m.CreatedAt.Format(time.RFC3339), Volumes: m.Inventory.Volumes, Restorable: compatible, Reason: reason})
+		}
+		ops, err := e.Operations()
+		if err != nil {
+			http.Error(w, err.Error(), 503)
+			return
+		}
+		pending := ""
+		var last storage.RestoreResult
+		var lastTime time.Time
+		for _, op := range ops {
+			if op.Phase != "completed" && op.Phase != "failed" {
+				pending = op.PointID
+			}
+			if op.Request.Action == "restore" && (op.Phase == "completed" || op.Phase == "failed") && op.UpdatedAt.After(lastTime) {
+				lastTime = op.UpdatedAt
+				last = storage.RestoreResult{ID: op.PointID, OK: op.Phase == "completed", Error: op.Error, Safety: op.SafetyID, CompletedAt: op.UpdatedAt.Format(time.RFC3339)}
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"points": points, "pending": storage.PendingRestore(snapshotsDir), "last": last, "applianceVersion": version()})
+		json.NewEncoder(w).Encode(map[string]any{"points": points, "pending": pending, "last": last, "operations": ops, "applianceVersion": version()})
 	})
 	mux.HandleFunc("POST /_agent/storage/restore-point", func(w http.ResponseWriter, r *http.Request) {
-		point, err := storage.TakeManualRestorePoint(r.Context(), storage.NewBtrfsFS(), restoreConfig("/var/lib").RestorePointConfig)
+		e, err := recoveryEngine("/var/lib", false)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		uid := r.Header.Get("Idempotency-Key")
+		if uid == "" {
+			uid = "manual-" + rand.Text()
+		}
+		op, err := e.Submit(r.Context(), recovery.Request{UID: uid, Action: "capture", Scope: "full"})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		fmt.Fprintf(w, "Restore point %s taken\n", point)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(op)
 	})
 	mux.HandleFunc("POST /_agent/storage/restore", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
@@ -79,7 +114,21 @@ func (g *guestHostAPI) restoreRoutes(mux *http.ServeMux) {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
-		if err := storage.RequestRestore(snapshotsDir, body.ID, version(), k3sVersion(), time.Now()); err != nil {
+		e, err := recoveryEngine("/var/lib", false)
+		if err != nil {
+			http.Error(w, err.Error(), 503)
+			return
+		}
+		m, err := e.Get(body.ID)
+		if err != nil {
+			http.Error(w, err.Error(), 409)
+			return
+		}
+		uid := r.Header.Get("Idempotency-Key")
+		if uid == "" {
+			uid = "manual-restore-" + rand.Text()
+		}
+		if _, err := e.Submit(r.Context(), recovery.Request{UID: uid, Action: "restore", Scope: m.Scope, PointID: m.ID}); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}

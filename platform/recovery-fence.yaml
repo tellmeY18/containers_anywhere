@@ -1,0 +1,60 @@
+# Imported PVCs are provisioned before their data is populated. Keep consumers
+# out until the complete restore set has been durably populated. Parameters are
+# selected in the admitted pod's namespace; no webhook/container is required.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: ca-recovery-pvc-consumers
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: v1
+    kind: PersistentVolumeClaim
+  matchConstraints:
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["pods"]
+  validations:
+  - expression: "params != null && (!has(object.spec.volumes) || object.spec.volumes.all(v, !has(v.persistentVolumeClaim) || v.persistentVolumeClaim.claimName != params.metadata.name))"
+    message: "A referenced PVC is being restored; wait for its RestoreRequest to complete before starting consumers"
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ca-recovery-pvc-consumers
+spec:
+  policyName: ca-recovery-pvc-consumers
+  validationActions: [Deny]
+  paramRef:
+    selector:
+      matchLabels:
+        recovery.containersanywhere.dev/restoring: "true"
+    parameterNotFoundAction: Allow
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: ca-recovery-pvc-fence-ownership
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["UPDATE", "DELETE"]
+      resources: ["persistentvolumeclaims"]
+  validations:
+  - expression: "request.userInfo.username == 'system:admin' || !has(oldObject.metadata.labels) || !('recovery.containersanywhere.dev/restoring' in oldObject.metadata.labels) || oldObject.metadata.labels['recovery.containersanywhere.dev/restoring'] != 'true' || (request.operation != 'DELETE' && has(object.metadata.labels) && 'recovery.containersanywhere.dev/restoring' in object.metadata.labels && object.metadata.labels['recovery.containersanywhere.dev/restoring'] == 'true' && object.metadata.labels['recovery.containersanywhere.dev/restore-uid'] == oldObject.metadata.labels['recovery.containersanywhere.dev/restore-uid'])"
+    message: "The recovery executor owns this PVC's restore fence until population completes"
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ca-recovery-pvc-fence-ownership
+spec:
+  policyName: ca-recovery-pvc-fence-ownership
+  validationActions: [Deny]

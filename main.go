@@ -62,6 +62,9 @@ func run() error {
 	if len(os.Args) > 1 && os.Args[1] == "guest" {
 		return guestMain()
 	}
+	if len(os.Args) > 1 && os.Args[1] == "recovery-backup" {
+		return runRecoveryBackupCLI(os.Args[2:])
+	}
 	if len(os.Args) < 2 {
 		return openDesktop()
 	}
@@ -148,7 +151,7 @@ func run() error {
 		}
 		return err
 	default:
-		return errors.New("commands: desktop, serve, doctor, status, stop, logs, backup, restore, update, requests, destinations, restore-point, autostart, gateway-configure, gateway-status, demo-check")
+		return errors.New("commands: desktop, serve, doctor, status, stop, logs, backup, restore, recovery-backup, update, requests, destinations, restore-point, autostart, gateway-configure, gateway-status, demo-check")
 	}
 }
 
@@ -315,6 +318,10 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 	platformCtx, stopPlatform := context.WithCancel(context.Background())
 	defer stopPlatform()
 	go maintainPlatform(platformCtx, client)
+	if protocol.Has(m.Capabilities, "recovery-v1") {
+		stopRecovery := startRecoveryBridge(platformCtx, state, client)
+		defer stopRecovery()
+	}
 	gateway, err := startGateway(state, vm)
 	if err != nil {
 		return err
@@ -355,6 +362,14 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 			return
 		}
 		name := strings.TrimPrefix(r.URL.Path, "/control/")
+		if strings.HasPrefix(name, "recovery/") {
+			if !protocol.Has(m.Capabilities, "recovery-v1") {
+				http.Error(w, "This appliance does not support Kubernetes-managed recovery.", http.StatusNotFound)
+				return
+			}
+			serveRecoveryControl(w, r, client)
+			return
+		}
 		if name == "update/commit" && r.Method == "POST" {
 			if err := commitUpdate(state, client, r); err != nil {
 				http.Error(w, err.Error(), http.StatusConflict)
@@ -410,7 +425,9 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 					return
 				}
 				// The restore runs before the cluster starts: restart the appliance now.
-				triggerPower("restart-appliance")
+				if !protocol.Has(m.Capabilities, "recovery-v1") {
+					triggerPower("restart-appliance")
+				}
 				io.WriteString(w, "The appliance is restarting to restore; the previous state is kept as a restore point.\n")
 				return
 			}

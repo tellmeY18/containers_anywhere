@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/tellmeY18/containers_anywhere/internal/atomicfile"
 )
 
 const (
@@ -25,7 +27,7 @@ func BeginSession(varLib string) (unclean bool, err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return unclean, err
 	}
-	return unclean, os.WriteFile(path, []byte(time.Now().UTC().Format(time.RFC3339)), 0o600)
+	return unclean, atomicfile.WritePrivate(path, []byte(time.Now().UTC().Format(time.RFC3339)))
 }
 
 // EndSession marks a clean shutdown. It runs after the cluster has stopped.
@@ -34,7 +36,10 @@ func EndSession(varLib string) error {
 	if os.IsNotExist(err) {
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return atomicfile.SyncDir(filepath.Join(varLib, "containers-anywhere"))
 }
 
 // ResetImageCache empties the container image cache, keeping the directory (a

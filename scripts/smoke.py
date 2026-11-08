@@ -15,6 +15,7 @@ import urllib.request
 
 from host_api_acceptance import host_api_acceptance
 from publication_acceptance import publication_acceptance
+from recovery_acceptance import recovery_acceptance
 
 
 class BootOnly(Exception):
@@ -133,6 +134,7 @@ def main():
     parser.add_argument("--runtime-archive", type=Path, help="exact QEMU archive pinned by the replacement app")
     parser.add_argument("--boot-only", action="store_true", help="stop after the appliance reports healthy (machine/CPU configuration replay)")
     parser.add_argument("--extended", action="store_true", help="wider checks: full publication suite, demo redirect/certificate status, fresh-namespace inspection and the uncommitted-candidate retry boot")
+    parser.add_argument("--recovery", action="store_true", help="opt-in real CSI, coordinated recovery and independent host-backup restore acceptance")
     parser.add_argument("--download", action="store_true", help="fresh boot through the packaged launcher's actual public download pins")
     parser.add_argument("--swap-bundle", type=Path, help="distinct root image with the same K3s for the root-swap drill: an unbootable candidate must fall back, then a good one must commit")
     parser.add_argument("--update-bundle", type=Path, help="distinct current data-contract appliance for explicit KVM update/recovery drill")
@@ -147,10 +149,13 @@ def main():
     admin = {"username": "mvptest", "password": secrets.token_urlsafe(24), "enableAnalytics": False}
     marker = None
     publication_identity = None
+    recovery_harness = None
+    exported_recovery = None
     timeout = int(os.environ.get("CONTAINERS_SMOKE_BOOT_SECONDS", "600"))
 
     def boot(directory, fresh=False, replacement=False, update=False, automatic=False, recovery_bundle=None,
-             commit=True, write_update_marker=False, swap=None):
+             commit=True, write_update_marker=False, swap=None, import_backup=None):
+        nonlocal recovery_harness, exported_recovery
         label = "fresh" if fresh else "restart"
         log = (directory / (label + "-smoke.log")).open("w")
         selected_binary = args.replacement_binary.resolve() if replacement else binary
@@ -181,6 +186,40 @@ def main():
                 assert {"status", "logs", "stop", "console-proxy", "platform-apply-v1", "workload-publication-v1"}.issubset(status["capabilities"])
                 return status.get("healthy") and status.get("console")
             wait_for(ready, process, timeout)
+            if import_backup is not None:
+                # This is a new image from the bundle template. The original
+                # data.img is absent throughout this drill; only the independent
+                # repository and separately held key supply the recovered data.
+                imported = subprocess.run([
+                    str(selected_binary), "recovery-backup", "import", "--state", str(directory),
+                    "--repository", str(import_backup["repository"]), "--id", import_backup["id"],
+                    "--key", str(import_backup["key"]), "--staging-dir", str(directory.parent),
+                ], capture_output=True, text=True, timeout=max(timeout, 1800))
+                if imported.returncode != 0:
+                    raise AssertionError("Independent host import failed: " + imported.stderr[-4096:])
+                point = json.loads(imported.stdout)
+                if point.get("scope") != "full" or not point.get("id"):
+                    raise AssertionError("Import did not publish the requested full recovery point")
+                uid = "replacement-" + secrets.token_hex(16)
+                request(c["URL"] + "/control/recovery/operations", c["Token"], {
+                    "uid": uid, "action": "restore", "scope": "full", "pointID": point["id"],
+                })
+
+                def imported_ready():
+                    control = json.loads((directory / "control.json").read_text())
+                    op = json.loads(request(control["URL"] + "/control/recovery/operations/" + uid, control["Token"]))
+                    if op.get("phase") == "failed":
+                        raise AssertionError("Imported restore failed: " + str(op.get("error")))
+                    if op.get("phase") != "completed":
+                        return False
+                    status = json.loads(request(control["URL"] + "/control/status", control["Token"]))
+                    if not status.get("healthy"):
+                        return False
+                    c.clear()
+                    c.update(control)
+                    return True
+
+                wait_for(imported_ready, process, max(timeout, 1800))
             if args.boot_only:
                 print("PASS: appliance boots healthy", flush=True)
                 raise BootOnly
@@ -245,7 +284,7 @@ def main():
                 assert observed == marker, "PVC contents changed after reboot/restore"
             if fresh and args.extended:
                 host_api_acceptance(c, browser, request, wait_for, process, directory, timeout)
-            if args.gateway:
+            if args.gateway and import_backup is None:
                 if fresh:
                     publication_acceptance(c["AppURL"], browser, request, wait_for, process,
                                            directory / "gateway/caddy/pki/authorities/local/root.crt",
@@ -339,6 +378,18 @@ def main():
                 journal = json.loads((directory / "update.json").read_text())
                 assert journal["phase"] == "committed"
                 assert journal["validated_at"]
+            if args.recovery:
+                if fresh:
+                    recovery_harness = recovery_acceptance(c, browser, request, wait_for, process, directory, timeout)
+                    recovery_harness.workload_host_roundtrip(selected_binary)
+                    recovery_harness.cold_cases(admin)
+                    exported_recovery = recovery_harness.host_backup(selected_binary)
+                    recovery_harness.require_complete()
+                elif recovery_harness is not None:
+                    recovery_harness.verify_restart(c, browser, process)
+                    if import_backup is not None:
+                        recovery_harness.record("replacement-import", "Independent host backup restores system identity and PVC contents into a new image with the source image absent",
+                                                backupID=import_backup["id"], pointID=import_backup["pointID"], originalImageAvailable=False)
         except BootOnly:
             pass
         finally:
@@ -363,6 +414,21 @@ def main():
         assert process.returncode == 0
 
     boot(state, fresh=True)
+    if args.recovery:
+        if exported_recovery is None:
+            raise AssertionError("Recovery acceptance did not export a full point")
+        replacement_state = state.with_name(state.name + "-host-restored")
+        replacement_state.mkdir()  # A genuinely new guest data disk, never a copy.
+        (replacement_state / "gateway.json").write_bytes(gateway_config)
+        source_image = state / "data.img"
+        retained_image = state / "data.img.acceptance-retained"
+        if retained_image.exists():
+            raise AssertionError("Refusing to overwrite retained acceptance image")
+        source_image.rename(retained_image)
+        try:
+            boot(replacement_state, import_backup=exported_recovery)
+        finally:
+            retained_image.rename(source_image)
     if args.restore:
         archive = state.parent / (state.name+".age")
         restored = state.parent / (state.name+"-restored")

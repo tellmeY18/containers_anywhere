@@ -1,0 +1,23 @@
+# Quiesce commands are workload-specific and must already exist in the image.
+# Resume is idempotent; check exits nonzero while writes remain blocked.
+# The controller pins pod UIDs and journals every attempted prepare before exec.
+# Sequential snapshots are not an atomic group snapshot or a PITR guarantee.
+apiVersion: recovery.containersanywhere.dev/v1alpha1
+kind: RecoveryPoint
+metadata:
+  name: before-upgrade
+  namespace: example
+spec:
+  capture:
+    selector:
+      matchLabels: {recovery-set: example}
+    expectedPVCs: [data, uploads]
+    consistency: QuiescedGroup
+    timeoutSeconds: 120
+    hooks:
+      - pod: example-0
+        container: application
+        prepare: [/app/bin/recovery-hook, prepare]
+        resume: [/app/bin/recovery-hook, resume]
+        check: [/app/bin/recovery-hook, check-resumed]
+        timeoutSeconds: 10

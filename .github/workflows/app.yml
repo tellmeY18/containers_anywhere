@@ -17,6 +17,10 @@ on:
         description: Also run the wider acceptance checks (implies e2e).
         type: boolean
         default: false
+      recovery:
+        description: Run Kubernetes recovery and host backup/restore acceptance (implies e2e; requires a recovery-capable appliance).
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -51,8 +55,9 @@ jobs:
       packages: '{"include":[{"runner":"ubuntu-24.04","platform":"linux","arch":"amd64"},{"runner":"windows-2025","platform":"windows","arch":"amd64"}]}'
       version: ${{ needs.dependencies.outputs.version }}
       reuse_appliance: true
-      e2e: ${{ inputs.e2e || inputs.extended }}
+      e2e: ${{ inputs.e2e || inputs.extended || inputs.recovery }}
       extended: ${{ inputs.extended }}
+      recovery: ${{ inputs.recovery }}
   arm64:
     needs: dependencies
     uses: ./.github/workflows/build-architecture.yml
@@ -63,5 +68,6 @@ jobs:
       packages: '{"include":[{"runner":"ubuntu-24.04-arm","platform":"linux","arch":"arm64"},{"runner":"macos-latest","platform":"macos","arch":"arm64"}]}'
       version: ${{ needs.dependencies.outputs.version }}
       reuse_appliance: true
-      e2e: ${{ inputs.e2e || inputs.extended }}
+      e2e: ${{ inputs.e2e || inputs.extended || inputs.recovery }}
       extended: ${{ inputs.extended }}
+      recovery: ${{ inputs.recovery }}

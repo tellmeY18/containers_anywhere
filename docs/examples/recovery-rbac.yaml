@@ -1,0 +1,55 @@
+# Administrator opt-in. Applying recovery platform CRDs installs no bindings.
+# Any requester in this namespace can exercise this service account's powers
+# through recovery CRs. Grant request creation only to equally trusted subjects.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: recovery-workload
+  namespace: example
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: recovery-workload
+  namespace: example
+rules:
+  - apiGroups: ['']
+    resources: [persistentvolumeclaims]
+    verbs: [get, list, create]
+  - apiGroups: [snapshot.storage.k8s.io]
+    resources: [volumesnapshots]
+    verbs: [get, create, delete]
+  - apiGroups: ['']
+    resources: [configmaps]
+    resourceNames: [example-config]
+    verbs: [get]
+  # Optional for quiesced groups. Explicit pod names restrict hook targets.
+  # RecoveryPoint create authority also delegates arbitrary exec in these pods.
+  - apiGroups: ['']
+    resources: [pods]
+    resourceNames: [example-0]
+    verbs: [get]
+  - apiGroups: ['']
+    resources: [pods/exec]
+    resourceNames: [example-0]
+    verbs: [create, get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: recovery-workload
+  namespace: example
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: recovery-workload}
+subjects:
+  - {kind: ServiceAccount, name: recovery-workload, namespace: example}
+---
+# This example assumes the workload-manager service account already exists.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: recovery-requester
+  namespace: example
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: containers-recovery-namespaced-requester}
+subjects:
+  - {kind: ServiceAccount, name: workload-manager, namespace: example}
