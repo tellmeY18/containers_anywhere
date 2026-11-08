@@ -154,8 +154,11 @@ runtimes are under `runtimes/`. Avoid cloud-synced folders.
 
 ## Backup and restore
 
-**Available today: manual, encrypted, stopped-VM recovery points. PITR,
-scheduled/off-device backups and automated recovery drills are not implemented.**
+**Manual encrypted stopped-VM backups remain available. This branch also includes
+experimental Kubernetes-managed Btrfs recovery and independent encrypted
+host-directory exports; CI/platform acceptance is pending.** See the
+[recovery API and host-backup guide](docs/RECOVERY.md). Remote destination adapters
+and database transaction-log PITR are not implemented.
 See the [recovery contract and planned architecture](docs/DISASTER_RECOVERY.md)
 for protection layers, failure scenarios and acceptance criteria.
 

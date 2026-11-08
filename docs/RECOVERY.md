@@ -1,7 +1,7 @@
 # Kubernetes-managed recovery
 
-Status: implementation in progress; build, boot, interruption and restore acceptance
-must run in GitHub Actions before release. This is discrete recovery history, not
+Status: implemented in source; CI build and recovery acceptance are pending.
+Build, boot, interruption and restore acceptance must pass before release. This is discrete recovery history, not
 database transaction-log PITR. No platform durability SLA is asserted.
 
 ## Two independent dimensions

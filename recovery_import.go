@@ -199,7 +199,10 @@ func (b *recoveryBridge) restoreImported(ctx context.Context, req recoveryapi.Im
 		if pv.Spec.CSI.Driver != "btrfs.csi.local" || pv.Spec.ClaimRef.UID != pvc.Metadata.UID || pv.Spec.ClaimRef.Namespace != req.Namespace || pv.Spec.ClaimRef.Name != name {
 			return fail(errors.New("new target PVC/PV binding differs from the requested identity"))
 		}
-		targets = append(targets, importedTarget{source.SnapshotHandle, pv.Spec.CSI.VolumeHandle, pvc.Metadata.UID, name, pvc.Spec.VolumeName})
+		targets = append(targets, importedTarget{
+			SourceSnapshotHandle: source.SnapshotHandle, TargetVolumeHandle: pv.Spec.CSI.VolumeHandle,
+			TargetPVCUID: pvc.Metadata.UID, TargetPVCName: name, TargetPVName: pvc.Spec.VolumeName,
+		})
 	}
 	populate := recovery.PopulateRequest{UID: req.RequestUID, PointID: req.PointID, Namespace: req.Namespace, NamespaceUID: req.NamespaceUID, Targets: targets}
 	var prior recovery.Population
