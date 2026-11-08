@@ -171,16 +171,22 @@ func swapFixture(t *testing.T) (string, swapJournal, manifest) {
 func TestSwapSessionCommitsAHealthyCandidate(t *testing.T) {
 	state, j, _ := swapFixture(t)
 	stop := make(chan struct{})
+	var stopOnce sync.Once
+	finish := func() { stopOnce.Do(func() { close(stop) }) }
+	defer finish()
 	calls := 0
-	go func() {
-		for got(t, state) != "committed" {
-			time.Sleep(5 * time.Millisecond)
-		}
-		close(stop)
-	}()
 	err := runSwapSession(state, &j, swapHooks{
-		serve: func() error { calls++; <-stop; return nil }, abort: func() { t.Error("healthy trial was aborted") },
+		serve: func() error { calls++; <-stop; return nil }, abort: func() { t.Error("healthy trial was aborted"); finish() },
 		healthy: func() bool { return true }, timeout: 5 * time.Second, poll: 5 * time.Millisecond,
+		// Observe the durable publication boundary rather than racing a file
+		// reader against Windows replacement. Fatal from a polling goroutine
+		// could exit that observer without ever releasing the fake server.
+		update: updateHooks{boundary: func(phase string) error {
+			if phase == "swap-committed" {
+				finish()
+			}
+			return nil
+		}},
 	})
 	if err != nil || calls != 1 || got(t, state) != "committed" {
 		t.Fatalf("err=%v calls=%d phase=%s", err, calls, got(t, state))
