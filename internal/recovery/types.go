@@ -88,6 +88,9 @@ type Backend interface {
 	Send(context.Context, string, io.Writer) error
 	Receive(context.Context, string, string, io.Reader) error
 	ReadOnly(context.Context, string) (bool, error)
+	// PreparePool ensures the containing filesystem has durable simple quotas
+	// before restoring CSI subvolumes; it must not fall back to full qgroups.
+	PreparePool(context.Context, string) error
 	SetLimit(context.Context, string, int64) error
 	Mounted(context.Context, string) (bool, error)
 }

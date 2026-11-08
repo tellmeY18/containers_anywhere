@@ -32,6 +32,56 @@ func (b *BtrfsBackend) ReadOnly(ctx context.Context, path string) (bool, error) 
 	out, err := run(ctx, "property", "get", "-ts", path, "ro")
 	return strings.TrimSpace(string(out)) == "ro=true", err
 }
+
+func (b *BtrfsBackend) PreparePool(ctx context.Context, filesystemPath string) error {
+	return prepareSimpleQuotas(ctx, filesystemPath, run)
+}
+
+func prepareSimpleQuotas(ctx context.Context, path string, command func(context.Context, ...string) ([]byte, error)) error {
+	// Match the pinned driver's first choice, but never its traditional-qgroup
+	// fallback. Kernel btrfs_quota_enable returns success when quota_root
+	// already exists, so success alone does not establish the requested mode.
+	if _, err := command(ctx, "quota", "enable", "--simple", path); err != nil {
+		return fmt.Errorf("enable required Btrfs simple quotas: %w", err)
+	}
+	out, err := command(ctx, "quota", "status", path)
+	if err != nil {
+		return fmt.Errorf("verify Btrfs simple quota mode: %w", err)
+	}
+	enabled, mode := "", ""
+	for _, line := range strings.Split(string(out), "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(value)
+		if len(fields) == 0 {
+			continue
+		}
+		switch key {
+		case "Enabled":
+			if enabled != "" {
+				return errors.New("duplicate quota enabled status")
+			}
+			enabled = fields[0]
+		case "Mode":
+			if mode != "" {
+				return errors.New("duplicate quota mode status")
+			}
+			mode = fields[0]
+		}
+	}
+	if enabled != "yes" || mode != "squota" {
+		return fmt.Errorf("restore requires enabled Btrfs simple quotas; reported enabled=%q mode=%q; existing quota mode was not changed", enabled, mode)
+	}
+	// Commit quota initialization before cloning restored volumes. Simple
+	// quotas use the generation following enablement for extent ownership.
+	if _, err := command(ctx, "filesystem", "sync", path); err != nil {
+		return fmt.Errorf("sync Btrfs simple quota initialization: %w", err)
+	}
+	return nil
+}
+
 func (b *BtrfsBackend) SetLimit(ctx context.Context, path string, size int64) error {
 	if size <= 0 {
 		return errors.New("invalid volume quota")

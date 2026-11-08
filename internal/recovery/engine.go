@@ -529,6 +529,14 @@ func (e *Engine) restore(ctx context.Context, m Manifest) error {
 	if err := e.verify(ctx, e.pointPath(m.ID), m); err != nil {
 		return err
 	}
+	if m.Scope == "full" && m.Inventory.PoolPresent {
+		// A fresh appliance may have no PVCs yet, so the CSI driver has never
+		// enabled quotas. Initialize its required filesystem feature state
+		// before replacing system/pool data or cloning restored volumes.
+		if err := e.cfg.FS.PreparePool(ctx, e.cfg.VarLib); err != nil {
+			return fmt.Errorf("prepare restored CSI pool: %w", err)
+		}
+	}
 	// mappingMatches is intentionally only before the destructive journal phase:
 	// after a crash the live datastore may be only partly restored.
 	if err := storage.ReplaceSystem(ctx, e.cfg.FS, e.cfg.VarLib, e.cfg.PoolDir, filepath.Join(e.pointPath(m.ID), "system"), e.cfg.Copy); err != nil {

@@ -125,6 +125,7 @@ func (f *fakeBackend) ReadOnly(_ context.Context, path string) (bool, error) {
 	return f.subs[i].ro, nil
 }
 func (f *fakeBackend) SetLimit(context.Context, string, int64) error { return nil }
+func (f *fakeBackend) PreparePool(context.Context, string) error     { return nil }
 func (f *fakeBackend) Mounted(context.Context, string) (bool, error) { return f.mounted, nil }
 func (f *fakeBackend) Send(_ context.Context, path string, w io.Writer) error {
 	files := map[string][]byte{}
