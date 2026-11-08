@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/tellmeY18/containers_anywhere/internal/protocol"
+	"github.com/tellmeY18/containers_anywhere/internal/recovery"
 	"io"
 	"log"
 	"net"
@@ -318,10 +319,12 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 	platformCtx, stopPlatform := context.WithCancel(context.Background())
 	defer stopPlatform()
 	go maintainPlatform(platformCtx, client)
+	stopRecovery := func() {}
 	if protocol.Has(m.Capabilities, "recovery-v1") {
-		stopRecovery := startRecoveryBridge(platformCtx, state, client)
+		stopRecovery = startRecoveryBridge(platformCtx, state, client)
 		defer stopRecovery()
 	}
+	closeVM := func() error { stopRecovery(); return vm.Close() }
 	gateway, err := startGateway(state, vm)
 	if err != nil {
 		return err
@@ -367,7 +370,7 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 				http.Error(w, "This appliance does not support Kubernetes-managed recovery.", http.StatusNotFound)
 				return
 			}
-			serveRecoveryControl(w, r, client)
+			serveRecoveryControl(w, r, client, state)
 			return
 		}
 		if name == "update/commit" && r.Method == "POST" {
@@ -407,6 +410,16 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 				return
 			}
 			if name == "restore-points/take" && r.Method == "POST" {
+				if protocol.Has(m.Capabilities, "recovery-v1") {
+					op, err := submitRecoveryOperation(r.Context(), state, client, recovery.Request{UID: "manual-" + randomToken(), Action: "capture", Scope: "full"})
+					if err != nil {
+						http.Error(w, err.Error(), http.StatusConflict)
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(op)
+					return
+				}
 				out, err := guestRestoreCall(r.Context(), client, "POST", "/_agent/storage/restore-point", nil)
 				if err != nil {
 					http.Error(w, err.Error(), http.StatusConflict)
@@ -417,6 +430,26 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 			}
 			if name == "restore-points/restore" && r.Method == "POST" {
 				body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
+				if err == nil && protocol.Has(m.Capabilities, "recovery-v1") {
+					var input struct {
+						ID string `json:"id"`
+					}
+					if json.Unmarshal(body, &input) != nil || !validRecoveryPathID(input.ID) {
+						http.Error(w, "invalid recovery point ID", http.StatusBadRequest)
+						return
+					}
+					var point recovery.Manifest
+					err = recoveryJSON(r.Context(), client, "GET", "/points/"+input.ID, nil, &point)
+					if err == nil {
+						_, err = submitRecoveryOperation(r.Context(), state, client, recovery.Request{UID: "manual-restore-" + randomToken(), Action: "restore", Scope: point.Scope, PointID: point.ID})
+					}
+					if err != nil {
+						http.Error(w, err.Error(), http.StatusConflict)
+						return
+					}
+					io.WriteString(w, "Restore queued; the appliance will restart and preserve a safety point first.\n")
+					return
+				}
 				if err == nil {
 					_, err = guestRestoreCall(r.Context(), client, "POST", "/_agent/storage/restore", body)
 				}
@@ -479,6 +512,9 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 		if !(r.Method == "GET" && (name == "status" || name == "logs")) && !(r.Method == "POST" && name == "stop") {
 			http.NotFound(w, r)
 			return
+		}
+		if name == "stop" && r.Method == "POST" {
+			stopRecovery()
 		}
 		req, _ := http.NewRequestWithContext(r.Context(), r.Method, "http://guest/_agent/"+name, nil)
 		resp, err := client.Do(req)
@@ -550,15 +586,15 @@ func serveUpdate(state, bundle string, port int, noOpen, activate bool) error {
 	for {
 		select {
 		case <-signals:
-			return vm.Close()
+			return closeVM()
 		case <-done:
-			return vm.Close()
+			return closeVM()
 		case <-swapAborted:
-			return vm.Close()
+			return closeVM()
 		case <-hostPower:
 			// Approved in the launcher. A restart request sets restartAfterStop, and
 			// serve() starts the appliance again once this session has closed.
-			return vm.Close()
+			return closeVM()
 		case healthy := <-ready:
 			if !healthy {
 				return fmt.Errorf("%s", bootDiagnosis(state))

@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/tellmeY18/containers_anywhere/internal/recovery"
 )
 
 func TestRecoveryControlDoesNotExposeControllerTransport(t *testing.T) {
@@ -18,6 +21,36 @@ func TestRecoveryControlDoesNotExposeControllerTransport(t *testing.T) {
 	}
 	if recoveryControlAllowed("POST", "/points/example/export") {
 		t.Fatal("an export must not allow mutations")
+	}
+}
+
+func TestControlRecoverySubmissionUsesLifecycleInterlock(t *testing.T) {
+	previous := recoveryStopping.Swap(false)
+	t.Cleanup(func() { recoveryStopping.Store(previous) })
+	state := t.TempDir()
+	calls := 0
+	client := &http.Client{Transport: recoveryTestTransport(func(r *http.Request) (*http.Response, error) {
+		calls++
+		marker, err := readRecoveryActivity(state)
+		if err != nil || marker.UID != "control-request" {
+			t.Fatalf("control bypassed durable interlock: %+v %v", marker, err)
+		}
+		w := httptest.NewRecorder()
+		_ = json.NewEncoder(w).Encode(recovery.Operation{Request: recovery.Request{UID: "control-request"}, Phase: "restart-needed"})
+		return w.Result(), nil
+	})}
+	submit := func() int {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/control/recovery/operations", strings.NewReader(`{"uid":"control-request","action":"capture","scope":"full"}`))
+		serveRecoveryControl(w, r, client, state)
+		return w.Code
+	}
+	if got := submit(); got != http.StatusOK {
+		t.Fatalf("submit returned %d", got)
+	}
+	recoveryStopping.Store(true)
+	if got := submit(); got != http.StatusConflict || calls != 1 {
+		t.Fatalf("stopping session accepted another request: %d calls %d", got, calls)
 	}
 }
 

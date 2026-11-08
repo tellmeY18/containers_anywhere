@@ -276,6 +276,7 @@ func (b *recoveryBridge) restoreImported(ctx context.Context, req recoveryapi.Im
 	if err != nil {
 		var httpErr *recoveryHTTPError
 		if errors.As(err, &httpErr) && httpErr.Status == http.StatusConflict {
+			b.report(err)
 			return fail(errors.New("guest could not safely populate imported volumes; inspect launcher logs"))
 		}
 		return wait(err)

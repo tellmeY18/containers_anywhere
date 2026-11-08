@@ -1,6 +1,11 @@
 name: Source checks
 on:
   workflow_dispatch:
+    inputs:
+      recovery_platforms:
+        description: Also run native macOS/Windows recovery tests and race checks (opt-in).
+        type: boolean
+        default: false
   push:
     branches: [develop]
   pull_request:
@@ -20,3 +25,17 @@ jobs:
       - run: test -z "$(gofmt -l $(git ls-files '*.go'))" && go vet ./... && go test -race ./...
       - run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/containers-anywhere.exe .
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
+  recovery-platforms:
+    if: github.event_name == 'workflow_dispatch' && inputs.recovery_platforms
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-latest, windows-2025]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race ./...

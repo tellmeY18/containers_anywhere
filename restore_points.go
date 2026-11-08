@@ -40,6 +40,21 @@ func runRestorePoint(state, operation, id string, acceptLoss bool) error {
 		return errors.New("the appliance is not running for this state directory")
 	}
 	switch operation {
+	case "staging":
+		b, err := controlCall(c, "GET", "/control/recovery/staging", nil, 30*time.Second)
+		if err == nil {
+			_, err = os.Stdout.Write(append(b, '\n'))
+		}
+		return err
+	case "remove-staging":
+		if !validRecoveryPathID(id) {
+			return errors.New("--id must identify an unpublished stage from restore-point --operation staging")
+		}
+		b, err := controlCall(c, "DELETE", "/control/recovery/staging/"+id, nil, 5*time.Minute)
+		if err == nil {
+			_, err = os.Stdout.Write(append(b, '\n'))
+		}
+		return err
 	case "status", "list", "":
 		b, err := controlCall(c, "GET", "/control/restore-points", nil, 30*time.Second)
 		if err == nil {
@@ -59,5 +74,5 @@ func runRestorePoint(state, operation, id string, acceptLoss bool) error {
 		}
 		return err
 	}
-	return errors.New("restore-point operation must be list or restore")
+	return errors.New("restore-point operation must be list, restore, staging or remove-staging")
 }

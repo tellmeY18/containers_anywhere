@@ -8,6 +8,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/tellmeY18/containers_anywhere/internal/diskspace"
 	"github.com/tellmeY18/containers_anywhere/internal/storage"
 )
 
@@ -16,6 +17,7 @@ const Version = 1
 var (
 	ErrBusy         = errors.New("another recovery operation is pending")
 	ErrInconsistent = errors.New("recovery is incomplete; K3s must not start")
+	ErrCapacity     = errors.New("insufficient guest recovery headroom")
 )
 
 type Request struct {
@@ -96,6 +98,9 @@ type Config struct {
 	FS                                       Backend
 	Datastore                                DatastoreAdapter
 	Copy                                     storage.Copier
+	// DiskSpace defaults to the attributed internal/diskspace implementation.
+	// Tests inject filesystem pressure without querying the developer host.
+	DiskSpace func(string) (diskspace.Usage, error)
 	// Cold must verify that K3s/containerd cannot write. Only init-data should
 	// provide this callback; serving processes must leave it nil.
 	Cold func(context.Context) error

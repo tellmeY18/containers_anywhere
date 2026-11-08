@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/tellmeY18/containers_anywhere/internal/atomicfile"
+	"github.com/tellmeY18/containers_anywhere/internal/diskspace"
 )
 
 var identifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$`)
@@ -34,6 +35,9 @@ func New(cfg Config) (*Engine, error) {
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
+	}
+	if cfg.DiskSpace == nil {
+		cfg.DiskSpace = diskspace.Of
 	}
 	for _, p := range []string{cfg.Root, filepath.Join(cfg.Root, "operations"), filepath.Join(cfg.Root, "points"), filepath.Join(cfg.Root, "staging"), filepath.Join(cfg.Root, "populations"), filepath.Join(cfg.Root, "volume-claims")} {
 		if err := os.MkdirAll(p, 0700); err != nil {

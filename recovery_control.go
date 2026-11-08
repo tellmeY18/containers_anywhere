@@ -9,16 +9,35 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/tellmeY18/containers_anywhere/internal/recovery"
 )
 
 // serveRecoveryControl runs only after the control listener's host/token check.
 // The browser and workload gateways never forward this namespace. Streaming
 // exports/imports use the same authenticated VM transport without the short
 // control client's timeout.
-func serveRecoveryControl(w http.ResponseWriter, r *http.Request, client *http.Client) {
+func serveRecoveryControl(w http.ResponseWriter, r *http.Request, client *http.Client, state string) {
 	path := strings.TrimPrefix(r.URL.Path, "/control/recovery")
 	if !recoveryControlAllowed(r.Method, path) || r.URL.RawQuery != "" {
 		http.NotFound(w, r)
+		return
+	}
+	if path == "/operations" && r.Method == http.MethodPost {
+		var req recovery.Request
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16384))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			http.Error(w, "invalid recovery operation", http.StatusBadRequest)
+			return
+		}
+		op, err := submitRecoveryOperation(r.Context(), state, client, req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(op)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Hour)
@@ -69,7 +88,7 @@ func recoveryControlAllowed(method, path string) bool {
 	p := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	if len(p) == 1 {
 		switch p[0] {
-		case "points", "restart-needed":
+		case "points", "restart-needed", "capacity", "staging":
 			return method == http.MethodGet
 		case "operations":
 			return method == http.MethodGet || method == http.MethodPost
@@ -79,6 +98,8 @@ func recoveryControlAllowed(method, path string) bool {
 	}
 	if len(p) == 2 && validRecoveryPathID(p[1]) {
 		return (p[0] == "operations" && method == http.MethodGet) ||
+			(p[0] == "workload-restore" && method == http.MethodGet) ||
+			(p[0] == "staging" && method == http.MethodDelete) ||
 			(p[0] == "points" && (method == http.MethodGet || method == http.MethodDelete))
 	}
 	return len(p) == 3 && p[0] == "points" && validRecoveryPathID(p[1]) && p[2] == "export" && method == http.MethodGet

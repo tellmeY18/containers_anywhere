@@ -213,7 +213,7 @@ def main():
                     if op.get("phase") != "completed":
                         return False
                     status = json.loads(request(control["URL"] + "/control/status", control["Token"]))
-                    if not status.get("healthy"):
+                    if not status.get("healthy") or not status.get("console"):
                         return False
                     c.clear()
                     c.update(control)

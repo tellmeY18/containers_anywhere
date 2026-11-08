@@ -146,35 +146,30 @@ func (b *BtrfsBackend) Receive(ctx context.Context, dir, name string, r io.Reade
 	if name != "system" && name != "pool" && !((strings.HasPrefix(name, "vol-") && identifier.MatchString(strings.TrimPrefix(name, "vol-"))) || (strings.HasPrefix(name, "snap-") && identifier.MatchString(strings.TrimPrefix(name, "snap-")))) {
 		return errors.New("invalid received subvolume name")
 	}
-	// Receive under a private chroot. Streams are prevalidated (no incremental
-	// parent or cross-subvolume clone references) before any ioctl is issued.
-	f, err := os.CreateTemp(dir, ".receive-")
+	// The engine already authenticated/spooled this member. Keep its guarded
+	// reader through validation AND command stdin, without duplicating that spool.
+	stream, ok := r.(io.ReadSeeker)
+	if !ok {
+		return errors.New("Btrfs receive requires a seekable authenticated spool")
+	}
+	size, err := stream.Seek(0, io.SeekEnd)
 	if err != nil {
 		return err
 	}
-	defer os.Remove(f.Name())
-	defer f.Close()
-	if _, err := io.Copy(f, io.LimitReader(r, MaxStreamBytes+1)); err != nil {
-		return err
-	}
-	st, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	if st.Size() > MaxStreamBytes {
+	if size < 1 || size > MaxStreamBytes {
 		return errors.New("Btrfs stream too large")
 	}
-	if _, err := f.Seek(0, 0); err != nil {
+	if _, err := stream.Seek(0, 0); err != nil {
 		return err
 	}
-	if err := validateStream(f, name); err != nil {
+	if err := validateStream(stream, name); err != nil {
 		return err
 	}
-	if _, err := f.Seek(0, 0); err != nil {
+	if _, err := stream.Seek(0, 0); err != nil {
 		return err
 	}
 	cmd := exec.CommandContext(ctx, "btrfs", "receive", "--chroot", dir)
-	cmd.Stdin = f
+	cmd.Stdin = stream
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("btrfs receive: %w: %s", err, out)

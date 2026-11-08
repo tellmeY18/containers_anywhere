@@ -13,6 +13,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/tellmeY18/containers_anywhere/internal/diskspace"
 )
 
 // Inode-backed fake subvolumes survive directory renames like real Btrfs. A
@@ -203,6 +205,9 @@ func setup(t *testing.T) fixture {
 		}
 	}
 	cfg := Config{Root: filepath.Join(root, "snapshots/recovery"), VarLib: lib, PoolDir: pool, Appliance: "0.1.0", K3s: "1.35.8+k3s1", DataFormat: "test-format", Architecture: "amd64", FS: fs, Datastore: fakeDatastore{}, Cold: func(context.Context) error { return nil }, Copy: func(_ context.Context, s, d string) error { return fs.copy(s, d, false) }}
+	cfg.DiskSpace = func(path string) (diskspace.Usage, error) {
+		return diskspace.Usage{Path: path, Total: 256 << 30, Free: 200 << 30}, nil
+	}
 	e, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)

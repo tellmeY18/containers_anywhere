@@ -86,7 +86,7 @@ func validateDriver(s driverState, in Inventory) error {
 // K3s. It promises only each individual snapshot's crash consistency, never an
 // atomic multi-volume or application-consistent checkpoint. Kubernetes ownership
 // and completed resource metadata are established by the authenticated controller.
-func (e *Engine) RegisterSnapshots(ctx context.Context, req RegisterRequest) (Manifest, error) {
+func (e *Engine) RegisterSnapshots(ctx context.Context, req RegisterRequest) (point Manifest, result error) {
 	if req.Consistency == "" {
 		req.Consistency = "individual-csi-crash-consistent"
 	}
@@ -123,6 +123,9 @@ func (e *Engine) RegisterSnapshots(ctx context.Context, req RegisterRequest) (Ma
 	} else if !os.IsNotExist(err) {
 		return old, err
 	}
+	if err := e.checkCapacity(metadataHeadroom); err != nil {
+		return Manifest{}, err
+	}
 	s, _, err := readDriver(filepath.Join(e.cfg.PoolDir, "state.json"))
 	if err != nil {
 		return Manifest{}, err
@@ -143,11 +146,15 @@ func (e *Engine) RegisterSnapshots(ctx context.Context, req RegisterRequest) (Ma
 	}
 	sort.Strings(m.Inventory.Snapshots)
 	m.Captures = captures(m.Scope, m.Inventory)
-	stage, err := os.MkdirTemp(filepath.Join(e.cfg.Root, "staging"), id+"-")
+	stage, err := e.newStage(id + "-")
 	if err != nil {
 		return m, err
 	}
+	defer e.recordStageFailure(stage, "workload-registration", &result)
 	for _, sid := range m.Inventory.Snapshots {
+		if err := e.checkCapacity(metadataHeadroom); err != nil {
+			return m, err
+		}
 		src := filepath.Join(e.cfg.PoolDir, "snapshots", sid)
 		st, err := os.Lstat(src)
 		if err != nil {

@@ -33,7 +33,7 @@ type archiveManifest struct {
 // Export emits a full, self-contained tar, not a live disk copy. It spools send
 // streams to know their exact size and hash before emitting the archive manifest.
 // The host must encrypt/authenticate the complete stream before remote transfer.
-func (e *Engine) Export(ctx context.Context, id string, w io.Writer) error {
+func (e *Engine) Export(ctx context.Context, id string, w io.Writer) (result error) {
 	unlock, err := e.lock()
 	if err != nil {
 		return err
@@ -52,11 +52,17 @@ func (e *Engine) Export(ctx context.Context, id string, w io.Writer) error {
 	if len(m.Captures) > MaxMembers {
 		return errors.New("too many captures")
 	}
-	dir, err := os.MkdirTemp(filepath.Join(e.cfg.Root, "staging"), "export-")
+	dir, err := e.newStage("export-")
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(dir)
+	defer func() {
+		if result != nil {
+			e.recordStageFailure(dir, "export", &result)
+		} else {
+			_ = os.RemoveAll(dir)
+		}
+	}()
 	a := archiveManifest{Version: Version, Point: m}
 	var total int64
 	for _, name := range m.Captures {
@@ -68,8 +74,11 @@ func (e *Engine) Export(ctx context.Context, id string, w io.Writer) error {
 			return err
 		}
 		h := sha256.New()
-		bw := &boundedWriter{w: io.MultiWriter(f, h), remaining: MaxStreamBytes}
+		bw := &boundedWriter{w: &capacityWriter{e: e, w: io.MultiWriter(f, h)}, remaining: MaxStreamBytes}
 		err = e.cfg.FS.Send(ctx, filepath.Join(e.pointPath(id), name), bw)
+		if err == nil {
+			err = f.Sync()
+		}
 		err = errors.Join(err, f.Close())
 		if err != nil {
 			return err
@@ -87,6 +96,9 @@ func (e *Engine) Export(ctx context.Context, id string, w io.Writer) error {
 	}
 	if len(b) > 4<<20 {
 		return errors.New("archive manifest too large")
+	}
+	if err := e.checkCapacity(metadataHeadroom); err != nil {
+		return err
 	}
 	tw := tar.NewWriter(w)
 	if err := tw.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0600, Size: int64(len(b)), Typeflag: tar.TypeReg}); err != nil {
@@ -129,7 +141,7 @@ func (w *boundedWriter) Write(p []byte) (int, error) {
 // Import verifies the complete archive and all member hashes before receiving
 // any subvolumes. Received snapshots remain staged until every member and the
 // captured datastore/identity manifests validate. It never activates live data.
-func (e *Engine) Import(ctx context.Context, r io.Reader) (Manifest, error) {
+func (e *Engine) Import(ctx context.Context, r io.Reader) (point Manifest, result error) {
 	unlock, err := e.lock()
 	if err != nil {
 		return Manifest{}, err
@@ -167,10 +179,33 @@ func (e *Engine) Import(ctx context.Context, r io.Reader) (Manifest, error) {
 	if _, err := os.Lstat(e.pointPath(m.ID)); !os.IsNotExist(err) {
 		return m, errors.New("import destination point already exists or is inaccessible")
 	}
-	dir, err := os.MkdirTemp(filepath.Join(e.cfg.Root, "staging"), "import-")
+	// Validate the WHOLE declaration before creating even the first spool.
+	var total, largest int64
+	for i, member := range a.Members {
+		if member.Name != m.Captures[i]+".btrfs" || member.Size < 1 || member.Size > MaxStreamBytes || len(member.SHA256) != 64 {
+			return m, errors.New("invalid archive member declaration")
+		}
+		if _, err := hex.DecodeString(member.SHA256); err != nil {
+			return m, errors.New("invalid archive member digest")
+		}
+		if member.Size > MaxArchiveBytes-total {
+			return m, errors.New("archive size limit exceeded")
+		}
+		total += member.Size
+		if member.Size > largest {
+			largest = member.Size
+		}
+	}
+	// All streams coexist during authentication. Also leave room for the
+	// largest receive's conservative data/metadata budget before spooling.
+	if err := e.checkCapacity(uint64(total) + receiveHeadroom(largest)); err != nil {
+		return m, err
+	}
+	dir, err := e.newStage("import-")
 	if err != nil {
 		return m, err
 	}
+	defer e.recordStageFailure(dir, "import", &result)
 	streams := filepath.Join(dir, "streams")
 	if err := os.Mkdir(streams, 0700); err != nil {
 		return m, err
@@ -179,15 +214,7 @@ func (e *Engine) Import(ctx context.Context, r io.Reader) (Manifest, error) {
 	if err := os.Mkdir(stage, 0700); err != nil {
 		return m, err
 	}
-	var total int64
 	for i, member := range a.Members {
-		if member.Name != m.Captures[i]+".btrfs" || member.Size < 1 || member.Size > MaxStreamBytes || len(member.SHA256) != 64 {
-			return m, errors.New("invalid archive member declaration")
-		}
-		total += member.Size
-		if total > MaxArchiveBytes {
-			return m, errors.New("archive size limit exceeded")
-		}
 		hdr, err := tr.Next()
 		if err != nil {
 			return m, err
@@ -200,7 +227,10 @@ func (e *Engine) Import(ctx context.Context, r io.Reader) (Manifest, error) {
 			return m, err
 		}
 		h := sha256.New()
-		n, err := io.Copy(io.MultiWriter(f, h), tr)
+		n, err := io.Copy(&capacityWriter{e: e, w: io.MultiWriter(f, h)}, tr)
+		if err == nil {
+			err = f.Sync()
+		}
 		err = errors.Join(err, f.Close())
 		if err != nil {
 			return m, err
@@ -217,8 +247,11 @@ func (e *Engine) Import(ctx context.Context, r io.Reader) (Manifest, error) {
 	if n, err := io.Copy(io.Discard, io.LimitReader(r, 1)); err != nil || n != 0 {
 		return m, errors.New("trailing archive data or authentication failure")
 	}
-	for _, name := range m.Captures {
+	for i, name := range m.Captures {
 		if err := ctx.Err(); err != nil {
+			return m, err
+		}
+		if err := e.checkCapacity(receiveHeadroom(a.Members[i].Size)); err != nil {
 			return m, err
 		}
 		f, err := os.Open(filepath.Join(streams, name))
@@ -230,12 +263,31 @@ func (e *Engine) Import(ctx context.Context, r io.Reader) (Manifest, error) {
 			f.Close()
 			return m, err
 		}
-		err = e.cfg.FS.Receive(ctx, receiveDir, name, f)
+		err = e.cfg.FS.Receive(ctx, receiveDir, name, &capacityReadSeeker{e: e, r: f})
 		err = errors.Join(err, f.Close())
 		if err != nil {
 			return m, err
 		}
-		if err := os.Rename(filepath.Join(receiveDir, name), filepath.Join(stage, name)); err != nil {
+		if err := e.checkCapacity(metadataHeadroom); err != nil {
+			return m, err
+		}
+		received := filepath.Join(receiveDir, name)
+		// Cross-parent directory rename requires MAY_WRITE on the moved inode
+		// (to update '..'), which Btrfs refuses for a received read-only root.
+		// Create a read-only snapshot at its final staged name instead. Keep the
+		// received source until that independent snapshot is durably synced.
+		if err := e.cfg.FS.Snapshot(ctx, received, filepath.Join(stage, name), true); err != nil {
+			return m, fmt.Errorf("stage received snapshot %s: %w", name, err)
+		}
+		if err := e.cfg.FS.Sync(ctx, stage); err != nil {
+			return m, fmt.Errorf("sync staged snapshot %s: %w", name, err)
+		}
+		if err := e.cfg.FS.DeleteSubvolume(ctx, received); err != nil {
+			return m, fmt.Errorf("remove duplicated received snapshot %s: %w", name, err)
+		}
+		// This authenticated stream now has a durable read-only staged copy.
+		// Reclaim its redundant spool before receiving the next member.
+		if err := os.Remove(filepath.Join(streams, name)); err != nil {
 			return m, err
 		}
 	}

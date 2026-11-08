@@ -12,6 +12,8 @@ import (
 )
 
 func TestRecoveryBackendPersistsIdentityBeforeGuestSubmission(t *testing.T) {
+	previous := recoveryStopping.Swap(false)
+	t.Cleanup(func() { recoveryStopping.Store(previous) })
 	state := t.TempDir()
 	called := false
 	client := &http.Client{Transport: recoveryTestTransport(func(r *http.Request) (*http.Response, error) {

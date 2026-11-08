@@ -121,6 +121,9 @@ func (e *Engine) PopulateWorkload(ctx context.Context, req PopulateRequest) (Pop
 		}
 		return p, cause
 	}
+	if err := e.checkCapacity(metadataHeadroom); err != nil {
+		return terminal(err)
+	}
 	m, err := e.get(req.PointID)
 	if err != nil {
 		return terminal(err)
@@ -191,6 +194,9 @@ func (e *Engine) PopulateWorkload(ctx context.Context, req PopulateRequest) (Pop
 		if result.Phase != "pending" && result.Phase != "copying" {
 			return p, errors.New("invalid target journal phase")
 		}
+		if err := e.checkCapacity(metadataHeadroom); err != nil {
+			return fail(i, err)
+		}
 		path := filepath.Join(e.cfg.PoolDir, "volumes", target.TargetVolumeHandle)
 		claimPath := filepath.Join(e.cfg.Root, "volume-claims", target.TargetVolumeHandle+".json")
 		claim := volumeClaim{req.UID, req.PointID, target}
@@ -232,6 +238,9 @@ func (e *Engine) PopulateWorkload(ctx context.Context, req PopulateRequest) (Pop
 			return fail(i, fmt.Errorf("target copy failed; partial data retained: %w", err))
 		}
 		if err := e.cfg.FS.Sync(ctx, path); err != nil {
+			return fail(i, err)
+		}
+		if err := e.checkCapacity(metadataHeadroom); err != nil {
 			return fail(i, err)
 		}
 		if err := e.targetIdle(ctx, target); err != nil {

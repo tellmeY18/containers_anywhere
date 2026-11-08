@@ -228,10 +228,12 @@ type Record struct {
 	DestinationUID    string                     `json:"destinationUID,omitempty"`
 	Export            ExportStatus               `json:"export"`
 	BackendSubmitted  bool                       `json:"backendSubmitted,omitempty"`
+	BackendAttempted  bool                       `json:"backendAttempted,omitempty"`
 	Operation         *ClusterOperation          `json:"operation,omitempty"`
 	RecoveryPointID   string                     `json:"recoveryPointID,omitempty"`
 	LastSchedule      *time.Time                 `json:"lastSchedule,omitempty"`
 	PendingSchedule   *time.Time                 `json:"pendingSchedule,omitempty"`
+	AwaitingCapture   string                     `json:"awaitingCapture,omitempty"`
 	RetentionEligible bool                       `json:"retentionEligible,omitempty"`
 	Prune             *PruneState                `json:"prune,omitempty"`
 	ResumeUncertain   bool                       `json:"resumeUncertain,omitempty"`

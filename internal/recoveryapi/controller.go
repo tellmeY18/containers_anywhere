@@ -23,6 +23,7 @@ type Controller struct {
 	Export          func(context.Context, Record, Destination) (ExportStatus, error)
 	RestoreImported func(context.Context, ImportedRestoreRequest) (ImportedRestoreStatus, error)
 	Prune           func(context.Context, Record) error
+	CheckCapacity   func(context.Context) error
 	Now             func() time.Time
 	mu              sync.Mutex
 }
@@ -369,6 +370,11 @@ func (c *Controller) point(ctx context.Context, o Object, r *Record, cluster boo
 	if err := s.Capture.Validate(); err != nil {
 		return c.reject(r, "InvalidSpec", err)
 	}
+	if c.CheckCapacity != nil {
+		if err := c.CheckCapacity(ctx); err != nil {
+			return c.reject(r, "StoragePressure", errors.New("capture requires healthy host and guest storage reserves; retry with a new request UID after capacity recovers"))
+		}
+	}
 	all, err := c.store().List()
 	if err != nil {
 		return err
@@ -446,6 +452,14 @@ func (c *Controller) cluster(ctx context.Context, r *Record, op ClusterOperation
 	if c.Backend == nil {
 		r.Phase, r.Reason, r.Message = "Pending", "BackendUnavailable", "Cluster recovery backend is not configured"
 		return c.store().Put(*r)
+	}
+	if op.Action == "Capture" && !r.BackendSubmitted && !r.BackendAttempted && c.CheckCapacity != nil {
+		if err := c.CheckCapacity(ctx); err != nil {
+			return c.reject(r, "StoragePressure", errors.New("capture requires healthy host and guest storage reserves; retry with a new request UID after capacity recovers"))
+		}
+	}
+	if !r.BackendSubmitted {
+		r.BackendAttempted = true
 	}
 	if err := c.store().Put(*r); err != nil {
 		return err
@@ -644,24 +658,37 @@ func (c *Controller) reconcilePolicy(ctx context.Context, o Object) error {
 	if r.Kind != o.Kind || r.Namespace != o.Metadata.Namespace || r.Name != o.Metadata.Name {
 		return errors.New("policy journal identity mismatch")
 	}
+	r.Reason, r.Message = "", ""
 	if s.Suspend {
 		r.Phase = "Suspended"
 	} else {
 		r.Phase = "Active"
-		if r.PendingSchedule == nil {
+		next := r.PendingSchedule
+		if next == nil {
 			schedule, _ := ParseSchedule(s.Schedule)
 			after := o.Metadata.CreationTimestamp
 			if r.LastSchedule != nil {
 				after = *r.LastSchedule
 			}
 			if slot, ok := schedule.Due(c.now(), after); ok {
-				r.PendingSchedule = &slot
+				next = &slot
+			}
+		}
+		if next != nil {
+			reason, message, err := c.scheduleGate(ctx, &r, s.KeepLast)
+			if err != nil {
+				return err
+			}
+			if reason != "" {
+				r.Phase, r.Reason, r.Message = "Holding", reason, message
+			} else if r.PendingSchedule == nil {
+				r.PendingSchedule = next
 				if err := c.store().Put(r); err != nil {
 					return err
 				}
 			}
 		}
-		if r.PendingSchedule != nil {
+		if r.PendingSchedule != nil && r.Phase != "Holding" {
 			kind := "RecoveryPoint"
 			if cluster {
 				kind = "ClusterRecoveryPoint"
@@ -695,6 +722,7 @@ func (c *Controller) reconcilePolicy(ctx context.Context, o Object) error {
 					return errors.New("scheduled recovery point name collision")
 				}
 			}
+			r.AwaitingCapture = name
 			r.LastSchedule, r.PendingSchedule = r.PendingSchedule, nil
 		}
 	}
@@ -733,6 +761,9 @@ func (c *Controller) reconcilePolicy(ctx context.Context, o Object) error {
 	st.Conditions = []Condition{{Type: "Retention", Status: "True", Reason: "PruningEnabled", Message: "Eligible sets retire through journaled CSI and engine deletion; physical space reclamation is eventual"}}
 	if len(pruneErrs) > 0 {
 		st.Conditions = []Condition{{Type: "Retention", Status: "False", Reason: "PruneBlocked", Message: "An eligible set could not be safely pruned; catalog and deletion journal retained"}}
+	}
+	if r.Phase == "Holding" {
+		st.Conditions = append(st.Conditions, Condition{Type: "Capture", Status: "False", Reason: r.Reason, Message: r.Message})
 	}
 	return errors.Join(c.patchStatus(ctx, o, st), errors.Join(pruneErrs...))
 }

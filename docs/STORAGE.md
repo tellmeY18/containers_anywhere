@@ -69,39 +69,46 @@ backups (see docs/DISASTER_RECOVERY.md). Snapshots and volumes share the disk's 
 
 ## Restore points
 
-The first time a different appliance version boots on a disk, before the cluster starts, the agent takes a read-only
-snapshot of `@system` and of every pool volume (and keeps the driver's `state.json`) under
-`/run/ca/snapshots/restore-<time>-from-<version>`. The last two are kept.
+The recovery executor takes cold system/full points before K3s starts, under
+`/run/ca/snapshots/recovery`. Full points include `@system`, pool metadata, every
+pool volume **and CSI snapshot data**. The executor also attempts a full point on
+an appliance version change. Scheduled retention is controlled by recovery policies;
+safety and active restore dependencies remain protected.
 
-### Restoring one (launcher only)
+### Capturing and restoring points
 
-Capability `system-restore-v1`. A person lists the points and restores one in the launcher panel, or with
-`restore-point --operation list` and `restore-point --operation restore --id <point> --accept-data-loss`. No workload can ask
-for it. A restore replaces the disk, so the only question is whether the state and the appliance that boots next are a
-supported pair, and that is decided by Kubernetes, not by Containers Anywhere: K3s migrates its datastore forward on start
-and never backwards. A point therefore records the exact K3s version that wrote its state, and it can be restored by the
-appliance that took it, or by a later appliance on the **same minor whose patch is not older** — the same one-way rule the
-launcher already applies to updates. State from a newer K3s, or from another minor, is refused with the reason and the
-appliance that has to run instead; the point's data format must also match the one this appliance supports. Points that
-record no K3s version (anything from 0.4.2 and earlier) are refused rather than guessed at. You can also take a point on
-demand (**Take a restore point now** in the panel), which is the way to keep a way back before a risky change without
-waiting for an appliance update.
+Capability `recovery-v1` adds Kubernetes-managed recovery. A person lists points
+and restores one in the launcher panel, or with `restore-point --operation list`
+and `restore-point --operation restore --id <point> --accept-data-loss`.
+Cluster administrators can use `ClusterRecoveryPoint` and `ClusterRestoreRequest`;
+namespace-local workloads use the separate PVC recovery resources.
 
-Asking records the request on the disk and restarts the appliance. The restore then runs in `init-data`, before K3s or
-anything else writes to the disk (`/var/lib` is mounted in the initrd, so it is replaced in place, not swapped):
+Recovery requires the recorded appliance version, exact K3s, architecture and data
+format. This intentionally does not infer a database migration from version order.
+The independent appliance update transaction retains its own compatibility rules.
+The panel's **Restart and take a full recovery point** action now performs a cold
+capture rather than sequential live system/volume snapshots.
 
-1. The state being replaced is first kept as a restore point of its own (`...-from-before-restore`). Nothing is deleted
-   before that point exists, and the point being restored from is never pruned.
-2. `/var/lib` is emptied except the image cache, the live journal and the pool; the point's `@system` snapshot is copied over
-   it (reflinks, so it is cheap); every pool volume is replaced by the point's copy and the driver's `state.json` is the
-   point's; the image cache is emptied and re-downloaded.
-3. If it fails part-way, the point from step 1 is restored in its place. If that fails too, the cluster does **not** start
-   (the console says why); both states are still in `@snapshots`. A power cut mid-restore resumes it at the next boot.
+Asking records a durable operation outside the system tree and restarts the
+appliance. Restore runs in `init-data` before K3s starts (`/var/lib` is mounted in
+the initrd, so its contents are replaced in place):
 
-What a restore does not cover: CSI `VolumeSnapshot` data (the snapshots directory in the pool is left as it is, so snapshots
-made after the point become orphans that still occupy space), anything outside the disk (images, registries, external
-systems), and application-level consistency: it is the disk as it was, not point-in-time recovery of any database. It
-discards everything written since, including workloads installed since.
+1. Validate the selected point and capture the state being replaced as a safety
+   point. If the current state cannot be preserved, refuse restoration.
+2. Restore the selected system tree. For a full point, restore the complete CSI
+   volume/snapshot inventory, driver metadata and quotas. System-only restoration
+   instead requires unchanged storage mappings/inventory. Disposable images are
+   re-downloaded.
+3. Resume interrupted replacement from the durable journal, or restore the safety
+   point after an ordinary failure. An ambiguous/inconsistent state prevents K3s
+   startup; both immutable recovery sources remain available.
+
+Full restoration replaces later cluster/PVC changes, including later installations.
+It does not undo external service effects or provide database PITR. These native
+points share the live disk; [independent host exports](RECOVERY.md) preserve recovery
+sets outside `data.img`. Source implementation and acceptance limitations are in
+that guide; neither archive integrity nor a successful reboot proves arbitrary
+application-level consistency.
 
 ## Image cache and unclean shutdowns
 
@@ -142,8 +149,8 @@ the apparent size.
 ## Limits and risks
 
 - `df` inside a pod shows the pool, not the volume's quota (the quota still enforces). The driver reports a snapshot
-  `restoreSize` of 16Ki. No `VolumeAttributesClass` (so compression and copy-on-write cannot be changed live), group
-  snapshots, or scheduled snapshots.
+  `restoreSize` of 16Ki. No `VolumeAttributesClass` (so compression and copy-on-write cannot be changed live) or atomic group
+  snapshots. Recovery policies add scheduling and checked quiesced groups above CSI.
 - btrfs can fail to allocate metadata on a nearly full small disk even when data space looks free. A full disk has not been
   tested.
 - The driver keeps its own `state.json`; what happens when it and the disk disagree has not been tested.
@@ -155,4 +162,5 @@ the apparent size.
   then replaced them with the upstream driver so every tool that speaks CSI and `VolumeSnapshot` works unchanged, and so
   the appliance stays vanilla. We evaluated [btrfs-nfs-csi](https://github.com/erikmagkekse/btrfs-nfs-csi): it mounts
   volumes only over NFS, which a single node does not need, and it brings far more to run. It is a reference only.
-- **Scheduled snapshots:** none in core Kubernetes; use each tool's own schedule (CNPG, Velero) until there is demand.
+- **Scheduled snapshots:** the app-owned recovery controller supplies UTC schedules and retention through `ProtectionPolicy`
+  and `ClusterProtectionPolicy`; standard `VolumeSnapshot` remains the per-volume primitive.

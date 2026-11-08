@@ -70,6 +70,9 @@ runtime and pinned by version and digest in platform/gateway.yaml. Source: https
 
 The Windows gateway-directory ACL follows the same CARE Clinic-derived private
 file ACL pattern already attributed above, with directory inheritance enabled.
+The host recovery repository's private staging directories and exclusive private
+key creation in `internal/backuprepo/lock_windows.go` use that same attributed ACL
+pattern. Recovery capacity checks reuse `internal/diskspace`.
 
 ## QEMU
 

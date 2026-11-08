@@ -60,6 +60,9 @@ func (e *Engine) Submit(ctx context.Context, req Request) (Operation, error) {
 	if err := e.requireNoPopulation(""); err != nil {
 		return Operation{}, err
 	}
+	if err := e.checkCapacity(metadataHeadroom); err != nil {
+		return Operation{}, err
+	}
 	if req.Action == "restore" {
 		m, err := e.get(req.PointID)
 		if err != nil {
@@ -160,6 +163,9 @@ func (e *Engine) process(ctx context.Context, op *Operation) error {
 		return fmt.Errorf("%w: invalid action", ErrInconsistent)
 	}
 	if op.Phase == "restart-needed" {
+		if err := e.checkCapacity(metadataHeadroom); err != nil {
+			return e.fail(op, err)
+		}
 		m, err := e.get(op.PointID)
 		if err != nil {
 			return e.fail(op, err)
@@ -358,7 +364,10 @@ func (e *Engine) inventory(ctx context.Context) (Inventory, error) {
 	return in, nil
 }
 
-func (e *Engine) capture(ctx context.Context, id, scope string) error {
+func (e *Engine) capture(ctx context.Context, id, scope string) (result error) {
+	if err := e.checkCapacity(metadataHeadroom); err != nil {
+		return err
+	}
 	if err := e.cfg.FS.ValidateLayout(ctx, e.cfg.VarLib, e.cfg.PoolDir); err != nil {
 		return err
 	}
@@ -383,12 +392,16 @@ func (e *Engine) capture(ctx context.Context, id, scope string) error {
 	if clean {
 		m.Consistency = "cold-after-graceful-shutdown"
 	}
-	stage, err := os.MkdirTemp(filepath.Join(e.cfg.Root, "staging"), id+"-")
+	stage, err := e.newStage(id + "-")
 	if err != nil {
 		return err
 	}
+	defer e.recordStageFailure(stage, "capture", &result)
 	// A failed stage is retained, never mistaken for a published point.
 	for _, name := range m.Captures {
+		if err := e.checkCapacity(metadataHeadroom); err != nil {
+			return err
+		}
 		src := e.cfg.VarLib
 		switch {
 		case name == "pool":
@@ -409,7 +422,13 @@ func (e *Engine) capture(ctx context.Context, id, scope string) error {
 }
 
 func (e *Engine) publish(ctx context.Context, stage string, m Manifest) error {
+	if err := e.checkCapacity(metadataHeadroom); err != nil {
+		return err
+	}
 	if err := e.cfg.FS.Sync(ctx, stage); err != nil {
+		return err
+	}
+	if err := e.checkCapacity(metadataHeadroom); err != nil {
 		return err
 	}
 	if err := writeRecord(filepath.Join(stage, "manifest.json"), m); err != nil {

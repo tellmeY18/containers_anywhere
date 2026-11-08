@@ -18,6 +18,10 @@ Only the authenticated host agent transport may expose `Engine.Routes`.
   The launcher gracefully restarts the **whole appliance**. The guest never
   stops K3s from inside a workload or attempts a live system capture.
 - `GET /_agent/recovery/points`: `{points:[Manifest...]}`.
+- `GET /_agent/recovery/capacity`: `{sizeBytes,freeBytes,reserveBytes}`.
+- `GET /_agent/recovery/staging`: retained failed/interrupted stage diagnostics.
+- `DELETE /_agent/recovery/staging/{id}`: explicit cleanup of unpublished work,
+  refused while a cold or population operation is active.
 - `GET|DELETE /_agent/recovery/points/{id}`.
 - `GET /_agent/recovery/points/{id}/export`: complete self-contained tar.
 - `POST /_agent/recovery/import`: tar body; returns the imported manifest.
@@ -69,6 +73,34 @@ Consistency is reported as `cold-after-graceful-shutdown` only when the durable
 session marker indicates the shutdown unit ran after K3s stopped; otherwise it
 is `cold-crash-consistent`. Neither means application consistency or PITR.
 
+## Guest headroom
+
+Production capacity comes from the attributed `internal/diskspace.Of` helper;
+`Config.DiskSpace func(string) (diskspace.Usage, error)` is injectable for tests.
+New work must leave `max(1 GiB, ceil(5% of disk size))` available, plus a 64 MiB
+metadata working budget. This keeps space for Btrfs COW/metadata and journals on
+small disks and scales the reserve on larger disks. Captures/registrations check
+before staging and each snapshot, and publication checks again after filesystem
+sync. New restore/safety capture and workload population also preflight. An
+already-destructive restore or rollback is attempted without a reserve-floor
+gate so pressure cannot itself prevent recovery of the original state.
+
+Export and import spool writers recheck at most every MiB, including within a
+single large Write. Import validates all declared member sizes before spooling
+and requires room for their total plus the largest receive budget. Each receive
+requires an additional `2 * streamSize + 64 MiB`, then a guarded reader checks
+headroom every MiB of validation/receive progress. Receive reuses the authenticated
+seekable spool directly rather than copying it to another temporary file. After
+successful receive its redundant spool is removed. These checks are conservative
+preflights, not reservations against concurrent workload writes or a guarantee
+that Btrfs metadata allocation will succeed.
+
+Capacity failures do not publish points or emit a completed export. Failed stages
+remain explicitly reported with the error and stage ID. Later insufficient-space
+attempts are refused before creating another stage; a hard limit of 64 retained
+stages additionally bounds repeated failures. Published/source/safety points are
+never deleted to make room. Cleanup of unpublished staging is explicit.
+
 ## Portable format and workload points
 
 The tar starts with `manifest.json`: `{version, point, members:[{name,size,sha256}]}`.
@@ -84,6 +116,12 @@ chroot. Device nodes, FIFOs, sockets, and data-less streams are explicitly
 unsupported in portable exports/imports. Exports spool streams to determine
 sizes and digests; imports stage streams and received subvolumes. Failed staging
 is retained and is never listed as a completed point.
+
+A received read-only subvolume is snapshotted read-only into its final staging
+location, then filesystem-synced before the temporary received copy is deleted.
+It is not renamed across parent directories: Linux checks write permission on
+the moved directory for that operation, which Btrfs rejects for a read-only root.
+Snapshot/sync failures retain the received source. No read-only flag is toggled.
 
 `POST /_agent/recovery/workload-snapshots` calls `RegisterSnapshots` with
 `{id,members:[{pvcNamespace,pvcName,pvcUID,pvName,volumeHandle,snapshotHandle,

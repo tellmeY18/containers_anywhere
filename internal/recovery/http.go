@@ -21,6 +21,15 @@ func (e *Engine) Routes(mux *http.ServeMux) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(v)
 	}
+	mux.HandleFunc("GET /_agent/recovery/capacity", func(w http.ResponseWriter, r *http.Request) { c, err := e.Capacity(); respond(w, c, err) })
+	mux.HandleFunc("GET /_agent/recovery/staging", func(w http.ResponseWriter, r *http.Request) {
+		stages, err := e.Staging()
+		respond(w, map[string]any{"staging": stages}, err)
+	})
+	mux.HandleFunc("DELETE /_agent/recovery/staging/{id}", func(w http.ResponseWriter, r *http.Request) {
+		err := e.DeleteStaging(r.Context(), r.PathValue("id"))
+		respond(w, map[string]any{"deleted": err == nil}, err)
+	})
 	mux.HandleFunc("POST /_agent/recovery/operations", func(w http.ResponseWriter, r *http.Request) {
 		var req Request
 		d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16384))

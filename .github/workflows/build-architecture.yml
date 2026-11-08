@@ -297,7 +297,9 @@ jobs:
         if: always()
         with:
           name: ${{ inputs.candidate_artifacts && 'candidate-app-' || '' }}diagnostics-${{ matrix.platform }}-${{ matrix.arch }}
-          path: dist/smoke*/*.log
+          path: |
+            dist/smoke*/*.log
+            dist/smoke*/recovery-evidence.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ${{ inputs.candidate_artifacts && 'candidate-app-' || '' }}package-${{ matrix.platform }}-${{ matrix.arch }}

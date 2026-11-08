@@ -15,6 +15,7 @@ controller := &recoveryapi.Controller{
     Export: exportPoint,
     RestoreImported: restoreImportedPoint,
     Prune: pruneRegisteredGuestPoint,
+    CheckCapacity: checkHostAndGuestReserves,
 }
 // Invoke periodically while the guest is reachable. Reconcile serializes calls.
 err := controller.Reconcile(ctx)
@@ -100,6 +101,14 @@ err := controller.Reconcile(ctx)
   The file store uses existing private atomic-file writes and keeps a record per
   UID. Its host-side path must never be within the rewound guest data disk. The
   launcher must allow only one controller process to own that state directory.
+- `CheckCapacity` is `func(context.Context) error`, supplied by the host for both
+  host and guest reserve checks. It runs before a due schedule creates a request,
+  before workload prepare/snapshot effects, and before the first cluster capture
+  submission. It does not gate restore or already-submitted operation observation.
+  Policy failures report `Holding/StoragePressure` without advancing the cursor;
+  a manual request reports `Failed/StoragePressure` and requires a new UID after
+  reserves recover. An uncertain prior backend submission is journaled as attempted
+  and retried idempotently rather than newly rejected by a later capacity check.
 
 Capture may take up to 300 seconds; checked resume is given an independent
 10-minute cleanup context even when the caller's context is cancelled. Individual
@@ -197,6 +206,13 @@ cluster restore requires no original capture CR or host catalog entry. It uses
   15-minute interval. Each reconcile coalesces missed slots to one within the last
   24 hours; policy UID/slot names and a host-side cursor prevent clock/rewind
   replay. Schedules are not a guarantee of capture while the app/guest is offline.
+  Export-pending, restore-protected, partial and active sets are bounded by the
+  policy's `keepLast` backlog budget. Healthy completed sets receive one extra
+  replacement slot, so newest-good protection does not deadlock rotation. Live
+  and still-pruning sets filling `keepLast + 1` hold capture as `RetentionBlocked`;
+  blocked sets filling `keepLast` report `CaptureBacklog`. An unobserved scheduled
+  CR reserves a slot as well. Held schedules leave the cursor unchanged and later
+  coalesce to the latest due slot; retention and export retries continue while held.
 
 ## Retention and deletion
 

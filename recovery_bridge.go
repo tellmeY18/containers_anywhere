@@ -11,9 +11,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tellmeY18/containers_anywhere/internal/backuprepo"
+	"github.com/tellmeY18/containers_anywhere/internal/diskspace"
 	"github.com/tellmeY18/containers_anywhere/internal/recovery"
 	"github.com/tellmeY18/containers_anywhere/internal/recoveryapi"
 )
@@ -29,6 +31,7 @@ type recoveryBridge struct {
 // The app owns policy reconciliation; the appliance owns only its cold executor.
 // Join shutdown so checked hook resumption finishes before closing the VM.
 func startRecoveryBridge(parent context.Context, state string, client *http.Client) func() {
+	recoveryStopping.Store(false)
 	ctx, cancel := context.WithCancel(parent)
 	long := recoveryStreamClient(client)
 	if real, err := filepath.EvalSymlinks(state); err == nil {
@@ -38,7 +41,7 @@ func startRecoveryBridge(parent context.Context, state string, client *http.Clie
 	b.controller = &recoveryapi.Controller{
 		Run: recoveryKubectl(long), Dir: filepath.Join(state, "recovery-api"), Backend: b,
 		HostDestination: b.destination, Export: b.export, RestoreImported: b.restoreImported,
-		Prune: b.prune,
+		Prune: b.prune, CheckCapacity: b.checkCapacity,
 	}
 	done := make(chan struct{})
 	go func() {
@@ -59,7 +62,38 @@ func startRecoveryBridge(parent context.Context, state string, client *http.Clie
 			}
 		}
 	}()
-	return func() { cancel(); <-done }
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			recoveryStopping.Store(true)
+			recoverySubmissionMu.Lock()
+			recoverySubmissionMu.Unlock()
+			cancel()
+			<-done
+		})
+	}
+}
+
+func (b *recoveryBridge) checkCapacity(ctx context.Context) error {
+	usage, err := diskspace.Of(b.state)
+	if err != nil {
+		return errors.New("cannot establish host free space for recovery")
+	}
+	if usage.Free < uint64(freeFloor(usage.Total)) {
+		return errors.New("host storage is below its recovery free-space reserve")
+	}
+	var capacity struct {
+		SizeBytes    uint64 `json:"sizeBytes"`
+		FreeBytes    uint64 `json:"freeBytes"`
+		ReserveBytes uint64 `json:"reserveBytes"`
+	}
+	if err := recoveryJSON(ctx, b.client, "GET", "/capacity", nil, &capacity); err != nil {
+		return errors.New("guest recovery capacity is unavailable")
+	}
+	if capacity.SizeBytes == 0 || capacity.ReserveBytes == 0 || capacity.FreeBytes < capacity.ReserveBytes {
+		return errors.New("guest Btrfs storage is below its recovery free-space reserve")
+	}
+	return nil
 }
 
 func (b *recoveryBridge) report(err error) {
@@ -77,21 +111,9 @@ func (b *recoveryBridge) report(err error) {
 }
 
 func (b *recoveryBridge) Submit(ctx context.Context, op recoveryapi.ClusterOperation) (recoveryapi.OperationStatus, error) {
-	if err := checkUpdateStart(b.state); err != nil {
-		return recoveryapi.OperationStatus{}, err
-	}
-	if swap, err := readSwap(b.state); err == nil && swap.Phase == "trying" {
-		return recoveryapi.OperationStatus{}, errors.New("finish the root swap trial before requesting recovery")
-	} else if err != nil && !os.IsNotExist(err) {
-		return recoveryapi.OperationStatus{}, err
-	}
-	if err := recordRecoveryActivity(b.state, op.UID); err != nil {
-		return recoveryapi.OperationStatus{}, err
-	}
-	var result recovery.Operation
-	err := recoveryJSON(ctx, b.client, "POST", "/operations", recovery.Request{
+	result, err := submitRecoveryOperation(ctx, b.state, b.client, recovery.Request{
 		UID: op.UID, Action: strings.ToLower(op.Action), Scope: op.Scope, PointID: op.RecoveryPointID,
-	}, &result)
+	})
 	if err != nil {
 		// An interrupted response may still have queued the operation. Leave
 		// the marker until a subsequent status query determines its outcome.
@@ -253,7 +275,7 @@ func (b *recoveryBridge) registerWorkload(ctx context.Context, record recoveryap
 		if err = json.Unmarshal(raw, &content); err != nil {
 			return "", err
 		}
-		if content.Spec.Driver != "btrfs.csi.local" || content.Spec.VolumeSnapshotRef.UID != m.SnapshotUID || content.Spec.VolumeSnapshotRef.Namespace != record.Namespace || content.Status.SnapshotHandle != m.SnapshotHandle || !content.Status.Ready {
+		if content.Metadata.UID != m.ContentUID || content.Spec.Driver != "btrfs.csi.local" || content.Spec.VolumeSnapshotRef.UID != m.SnapshotUID || content.Spec.VolumeSnapshotRef.Namespace != record.Namespace || content.Status.SnapshotHandle != m.SnapshotHandle || !content.Status.Ready {
 			return "", errors.New("CSI snapshot identity changed before export")
 		}
 		meta := workloadExportMetadata{NamespaceUID: record.NamespaceUID, Member: m, Consistency: record.Consistency}
