@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -61,7 +62,13 @@ func TestDataDiskFactReportsRealCostAndHeadroom(t *testing.T) {
 	if d == nil || d.SizeBytes != 8<<30 || d.CeilingBytes != maxDataDiskBytes {
 		t.Fatalf("%+v", d)
 	}
-	if d.AllocatedBytes <= 0 || d.AllocatedBytes >= 8<<30 {
+	if runtime.GOOS == "windows" {
+		// Windows currently reports logical size as a conservative allocation
+		// estimate; it does not advertise the Unix allocated-block guarantee.
+		if d.AllocatedBytes != d.SizeBytes {
+			t.Fatalf("Windows must report its conservative allocation estimate: %+v", d)
+		}
+	} else if d.AllocatedBytes <= 0 || d.AllocatedBytes >= 8<<30 {
 		t.Fatalf("a sparse disk must cost much less than its size: %+v", d)
 	}
 	if d.MaxGrowthBytes > maxDataDiskBytes-8<<30 {

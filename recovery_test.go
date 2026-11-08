@@ -186,8 +186,10 @@ func TestTheRecoveryKeyIsCreatedOnceAndOnlyExportedByTheLauncher(t *testing.T) {
 	if a.String() != b.String() {
 		t.Fatal("the key must be created once and reused")
 	}
-	if info, _ := os.Stat(filepath.Join(state, recoveryKeyFile)); info.Mode().Perm() != 0600 {
-		t.Fatal("the key file must be private")
+	// Windows reports synthetic Unix mode bits. Private Windows repository/key
+	// ACLs are exercised directly in internal/backuprepo/private_windows_test.go.
+	if info, _ := os.Stat(filepath.Join(state, recoveryKeyFile)); runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+		t.Fatal("the key file must have private Unix permissions")
 	}
 	k := recoveryKitFact(state)
 	if !k.KeyPresent || k.KeyExported || !strings.Contains(k.Note, "only on this computer") {

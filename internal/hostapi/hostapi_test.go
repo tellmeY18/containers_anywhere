@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -376,6 +377,9 @@ func trust(uid, endpoint string, http bool) Trust {
 }
 
 func TestRegistryTrustWritesRemovesAndOnlyTouchesWhatItOwns(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("containerd registry files are guest-Linux paths containing a port colon")
+	}
 	dir := t.TempDir()
 	certs, state := filepath.Join(dir, "certs.d"), filepath.Join(dir, "state", "registry-trust.json")
 	foreign := filepath.Join(certs, "127.0.0.1:9999")
@@ -419,6 +423,9 @@ func TestRegistryTrustWritesRemovesAndOnlyTouchesWhatItOwns(t *testing.T) {
 }
 
 func TestRegistryTrustRefusesToReplaceForeignConfigurationAndDuplicates(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("containerd registry files are guest-Linux paths containing a port colon")
+	}
 	dir := t.TempDir()
 	certs := filepath.Join(dir, "certs.d")
 	foreign := filepath.Join(certs, "127.0.0.1:30500")

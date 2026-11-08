@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"path"
@@ -75,8 +76,22 @@ func validateStream(r io.Reader, name string) error {
 		}
 		// A device node could turn a later WRITE into access to the live block
 		// device even inside a chroot; FIFOs can block the receiver indefinitely.
-		if cmd == 5 || cmd == 6 || cmd == 7 {
-			return errors.New("portable recovery does not support device nodes, FIFOs or sockets")
+		if cmd == 5 || cmd == 6 {
+			return fmt.Errorf("portable recovery does not support device nodes or FIFOs (command %d)", cmd)
+		}
+		if cmd == 7 {
+			// Linux send emits PATH, INO, MODE and RDEV for MKSOCK. The
+			// btrfs-progs receiver hardcodes mknod(path, 0600|S_IFSOCK, 0):
+			// this creates an inert socket inode, never a device or a connection.
+			// Validate even the MODE/RDEV attributes it ignores, so this
+			// exception cannot smuggle a different special-node type.
+			if len(attrs) != 4 || len(attrs[3]) != 8 || len(attrs[5]) != 8 || len(attrs[8]) != 8 {
+				return errors.New("invalid MKSOCK attributes")
+			}
+			mode := binary.LittleEndian.Uint64(attrs[5])
+			if mode&0170000 != 0140000 || mode & ^uint64(0177777) != 0 || binary.LittleEndian.Uint64(attrs[8]) != 0 {
+				return errors.New("MKSOCK must describe a socket inode with zero device number")
+			}
 		}
 		if cmd == 21 {
 			if len(payload) != 0 {

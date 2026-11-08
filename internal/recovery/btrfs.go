@@ -136,10 +136,21 @@ func (b *BtrfsBackend) Send(ctx context.Context, path string, w io.Writer) error
 	err := cmd.Run()
 	_ = writer.CloseWithError(err)
 	validationErr := <-checked
-	if err != nil {
-		return fmt.Errorf("btrfs send: %w: %s", err, stderr.String())
+	return sendErrors(err, validationErr, stderr.String())
+}
+
+// Rejecting a stream closes the reader and commonly makes the sender exit with
+// SIGPIPE. Preserve the validator's actionable cause instead of masking it with
+// that secondary process error; retain both causes for errors.Is/diagnostics.
+func sendErrors(commandErr, validationErr error, stderr string) error {
+	var errs []error
+	if validationErr != nil {
+		errs = append(errs, fmt.Errorf("btrfs send stream validation: %w", validationErr))
 	}
-	return validationErr
+	if commandErr != nil {
+		errs = append(errs, fmt.Errorf("btrfs send command: %w: %s", commandErr, strings.TrimSpace(stderr)))
+	}
+	return errors.Join(errs...)
 }
 
 func (b *BtrfsBackend) Receive(ctx context.Context, dir, name string, r io.Reader) error {

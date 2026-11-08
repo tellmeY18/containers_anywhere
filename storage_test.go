@@ -140,7 +140,9 @@ func TestASparseDiskIsBackedUpAsItsDataAndRestoredWithItsHoles(t *testing.T) {
 			t.Fatalf("data at %d: %q", off, b)
 		}
 	}
-	if alloc, err := allocatedBytes(filepath.Join(target, "data.img")); err == nil && alloc > size/2 {
+	// sparse_other.go deliberately archives densely on Windows. The byte and
+	// size checks above apply everywhere; hole preservation is a Unix contract.
+	if alloc, err := allocatedBytes(filepath.Join(target, "data.img")); runtime.GOOS != "windows" && err == nil && alloc > size/2 {
 		t.Fatalf("the restore materialised the holes: %d bytes allocated", alloc)
 	}
 }

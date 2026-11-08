@@ -112,8 +112,16 @@ The host must authenticate/decrypt the complete age archive before activation.
 
 Streams are full Btrfs protocol-v1 sends, no incremental parents or outside clone
 dependencies. Command CRCs and paths are validated; receive runs in a private
-chroot. Device nodes, FIFOs, sockets, and data-less streams are explicitly
-unsupported in portable exports/imports. Exports spool streams to determine
+chroot. Device nodes, FIFOs, and data-less streams are explicitly unsupported in
+portable exports/imports. Socket inodes (including persisted kubelet/CSI runtime
+socket paths) are supported through validated `MKSOCK` commands. Upstream
+[`process_mksock`](https://github.com/kdave/btrfs-progs/blob/master/cmds/receive.c)
+hardcodes `mknod(path, 0600 | S_IFSOCK, 0)` and never connects to the socket;
+ordinary file open on such an inode fails with `ENXIO`. The validator requires
+the kernel's socket-only mode, zero device number, expected attributes and safe
+nonempty path. This does not enable `MKNOD` or `MKFIFO`. Send failures report the
+validator error together with any consequent broken-pipe/process error.
+Exports spool streams to determine
 sizes and digests; imports stage streams and received subvolumes. Failed staging
 is retained and is never listed as a completed point.
 
