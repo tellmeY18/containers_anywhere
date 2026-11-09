@@ -1,8 +1,33 @@
 # Kubernetes-managed recovery
 
-Status: implemented in source; CI build and recovery acceptance are pending.
-Build, boot, interruption and restore acceptance must pass before release. This is discrete recovery history, not
-database transaction-log PITR. No platform durability SLA is asserted.
+Status: implemented and accepted by the Linux/KVM recovery drill in CI. Native
+Linux/macOS/Windows vet and race tests also pass. Physical-platform, database-specific
+and power-loss qualification remain production gates. This is discrete recovery
+history, not database transaction-log PITR. No platform durability SLA is asserted.
+
+## Accepted build
+
+Implementation commit: `250f1abf8cdcc842bd3d333b87fb0fe374e5350b`.
+
+- [Source/native tests, run 42534383860](https://github.com/tellmeY18/containers_anywhere/actions/runs/42534383860):
+  Go formatting, vet and race tests on Linux; native vet/race suites on macOS and
+  Windows; Windows cross-compilation and Python checks.
+- [Appliance/recovery acceptance, run 42534383835](https://github.com/tellmeY18/containers_anywhere/actions/runs/42534383835):
+  ARM64/AMD64 appliances and all four host packages built successfully, including
+  independent candidate-app packaging. The explicit `recovery=true` input enabled
+  the full Linux AMD64 KVM lifecycle; `extended` was not enabled.
+- The real VM drill passed CSI and recovery-CRD new-PVC restoration, workload host
+  export/import after deleting the registered guest point, system-only and full
+  cold capture/restore, encrypted full export, tampered/truncated archive refusal,
+  and restoration into a fresh image while the original `data.img` was absent.
+- The same run passed reboot/cold-backup recovery, app replacement preserving the
+  selected appliance and data, root-swap commit, and fallback from an unbootable
+  candidate. Recovery evidence is retained in `diagnostics-linux-amd64`.
+
+These are marker-based filesystem/control-plane acceptance results, not a claim
+of PostgreSQL/MySQL/object-store application consistency. macOS/Windows native
+tests and packaging are not VM boot acceptance on Virtualization.framework/WHPX.
+No release or merge is implied by these CI results.
 
 ## Two independent dimensions
 

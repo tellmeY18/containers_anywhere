@@ -156,7 +156,8 @@ runtimes are under `runtimes/`. Avoid cloud-synced folders.
 
 **Manual encrypted stopped-VM backups remain available. This branch also includes
 experimental Kubernetes-managed Btrfs recovery and independent encrypted
-host-directory exports; CI/platform acceptance is pending.** See the
+host-directory exports, with Linux/KVM recovery accepted in CI. Physical-platform
+and production durability qualification remain pending.** See the
 [recovery API and host-backup guide](docs/RECOVERY.md). Remote destination adapters
 and database transaction-log PITR are not implemented.
 See the [recovery contract and planned architecture](docs/DISASTER_RECOVERY.md)
