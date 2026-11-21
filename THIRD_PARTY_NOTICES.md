@@ -74,6 +74,13 @@ The host recovery repository's private staging directories and exclusive private
 key creation in `internal/backuprepo/lock_windows.go` use that same attributed ACL
 pattern. Recovery capacity checks reuse `internal/diskspace`.
 
+## Launcher panel (letsimpl.fyi brand system)
+
+The launcher panel vendors, unmodified, the CSS and fonts from https://brand.letsimpl.fyi
+(tokens 0.3.0; AGPL-3.0, same as this project) in `internal/desktopui/assets/`. The
+fonts Atkinson Hyperlegible Mono and Courier Prime are licensed under the SIL Open Font
+License 1.1; their notices are beside the font files. See `internal/desktopui/BRAND.md`.
+
 ## QEMU
 
 Linux packages redistribute Ubuntu's QEMU and shared-library packages with their

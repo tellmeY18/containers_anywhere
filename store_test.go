@@ -262,8 +262,8 @@ func TestPodSummary(t *testing.T) {
 }
 
 func TestDesktopOffersTheStoreWithoutInjectableText(t *testing.T) {
-	for _, required := range []string{`id="store"`, "store/install", "store/review", "unverified", "prompt("} {
-		if !strings.Contains(desktopHTML, required) {
+	for _, required := range []string{"store/install", "store/review", "Unverified", "confirmSheet(", "type: r.risk"} {
+		if !strings.Contains(desktopSource, required) {
 			t.Fatalf("missing store UI: %s", required)
 		}
 	}

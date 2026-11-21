@@ -1,0 +1,125 @@
+/* GENERATED from tokens/tokens.json by tools/build-tokens.mjs. Do not edit. */
+:root {
+  color-scheme: light dark;
+  --danger: #EE8866;
+  --warning: #EEDD88;
+  --success: #44BB99;
+  --info: #99DDFF;
+  --root-size: 112.5%;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-bold: 700;
+  --font-ui: "Atkinson Hyperlegible Mono", ui-monospace, "Courier New", monospace;
+  --font-read: "Atkinson Hyperlegible Next", system-ui, sans-serif;
+  --font-receipt: "Courier Prime", "Courier New", monospace;
+  --font-malayalam: "Noto Serif Malayalam", serif;
+  --font: var(--font-ui);
+  --text-hero: 1.5rem;
+  --leading-hero: 1.4167;
+  --text-title: 1.75rem;
+  --leading-title: 1.25;
+  --text-section: 1.25rem;
+  --leading-section: 1.35;
+  --text-sub: 1rem;
+  --leading-sub: 1.5556;
+  --text-body: 1rem;
+  --leading-body: 1.5556;
+  --text-secondary: 0.8889rem;
+  --leading-secondary: 1.5;
+  --text-small: 0.7778rem;
+  --leading-small: 1.4286;
+  --text-total: 1.75rem;
+  --leading-total: 1.125;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --measure: 560px;
+  --pad-phone: 16px;
+  --pad-wide: 24px;
+  --touch-min: 44px;
+  --touch-preferred: 48px;
+  --rule: 2px solid var(--ink);
+  --hair: 1px solid var(--line);
+  --focus-width: 3px;
+  --radius-square: 0;
+  --motion-state: 120ms;
+  --motion-sheet: 200ms;
+  --motion-wordmark: 4.4s;
+  --tape-hatch: repeating-linear-gradient(115deg, rgb(255 255 255 / 25%) 0 1.5px, transparent 1.5px 4px);
+  --page: #FFFFFF;
+  --ink: #000000;
+  --muted: #4D4D4D;
+  --line: #767676;
+  --tape: #D2D2D2;
+  --receipt: #FBF6E9;
+  --crayon-ink: #111111;
+  --danger-ink: #CC3311;
+  --success-ink: #228833;
+  --warning-ink: #775500;
+  --info-ink: #4477BB;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #000000;
+    --ink: #FFFFFF;
+    --muted: #B8B8B8;
+    --line: #767676;
+    --tape: #5A5A5A;
+    --receipt: #EDE7D6;
+    --crayon-ink: #111111;
+    --danger-ink: #EE8866;
+    --success-ink: #44BB99;
+    --warning-ink: #EEDD88;
+    --info-ink: #99DDFF;
+  }
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --page: #FFFFFF;
+  --ink: #000000;
+  --muted: #4D4D4D;
+  --line: #767676;
+  --tape: #D2D2D2;
+  --receipt: #FBF6E9;
+  --crayon-ink: #111111;
+  --danger-ink: #CC3311;
+  --success-ink: #228833;
+  --warning-ink: #775500;
+  --info-ink: #4477BB;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #000000;
+  --ink: #FFFFFF;
+  --muted: #B8B8B8;
+  --line: #767676;
+  --tape: #5A5A5A;
+  --receipt: #EDE7D6;
+  --crayon-ink: #111111;
+  --danger-ink: #EE8866;
+  --success-ink: #44BB99;
+  --warning-ink: #EEDD88;
+  --info-ink: #99DDFF;
+}
+:root[data-text="large"] {
+  --root-size: 125%;
+}
+:root[data-contrast="high"] {
+  --muted: var(--ink);
+  --line: var(--ink);
+}
+:root[data-colour="reduced"] {
+  --danger: #E6E6E6;
+  --warning: #E6E6E6;
+  --success: #E6E6E6;
+  --info: #E6E6E6;
+  --danger-ink: var(--ink);
+  --success-ink: var(--ink);
+  --warning-ink: var(--ink);
+  --info-ink: var(--ink);
+}

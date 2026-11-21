@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<title>containers anywhere</title>
+<link rel="stylesheet" href="/assets/tokens/tokens.css">
+<link rel="stylesheet" href="/assets/css/base.css">
+<link rel="stylesheet" href="/assets/css/components.css">
+<link rel="stylesheet" href="/assets/css/panel.css">
+<script type="module" src="/assets/js/main.js"></script>
+</head>
+<body>
+<a class="ls-skip" href="#main">Skip to content</a>
+<div class="ca-shell">
+  <aside class="ca-side">
+    <header class="ca-brand">
+      <p class="ca-mark"><a href="#cluster"><mark>containers</mark> anywhere</a></p>
+      <span class="ls-tag">beta</span>
+    </header>
+    <nav id="nav" class="ca-nav" aria-label="Sections"></nav>
+    <nav class="ca-tools" aria-label="Tools">
+      <a id="nav-diagnostics" href="#diagnostics">Diagnostics</a>
+      <button id="open-display" class="ls-btn ls-btn--small" type="button">Display</button>
+    </nav>
+    <footer class="ca-footer">
+      <p id="versions"></p>
+      <p>Your data stays on this computer. Closing this tab keeps your cluster running.</p>
+      <p><a href="https://letsimpl.fyi" target="_blank" rel="noopener noreferrer" class="ls-out">a letsimpl.fyi project</a></p>
+      <p><a href="https://github.com/tellmeY18/containers_anywhere" target="_blank" rel="noopener noreferrer" class="ls-out">source</a></p>
+    </footer>
+  </aside>
+  <div class="ca-content">
+    <noscript>This panel needs JavaScript. It runs only on this computer.</noscript>
+    <section id="status" class="ca-status" aria-labelledby="status-headline"></section>
+    <div id="alerts" class="ca-alerts"></div>
+    <main id="main" tabindex="-1"></main>
+  </div>
+</div>
+<div id="toasts" class="ca-toasts" role="status" aria-live="polite"></div>
+<dialog id="sheet" class="ls-sheet" aria-labelledby="sheet-title"></dialog>
+</body>
+</html>

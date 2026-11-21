@@ -1,0 +1,172 @@
+/* Components. Plain classes, prefixed ls-, no framework required.
+   Requires tokens/tokens.css and css/base.css. */
+
+/* ---------- Skip link ---------- */
+.ls-skip { position: absolute; z-index: 10; top: -100px; left: 8px; padding: 12px; color: var(--ink); background: var(--page); border: var(--rule); }
+.ls-skip:focus { top: 8px; }
+
+/* ---------- Crayon fill (shared) ---------- */
+/* Status fills: flat, square, #111 text. Only for danger, warning, success, info. */
+.ls-fill { color: var(--crayon-ink); }
+.ls-fill--danger { background-color: var(--danger); }
+.ls-fill--warning { background-color: var(--warning); }
+.ls-fill--success { background-color: var(--success); }
+.ls-fill--info { background-color: var(--info); }
+
+/* ---------- Wordmark ---------- */
+.ls-mark { margin: 0; padding: 0; border: 0; font-size: min(calc((100vw - 2 * var(--pad)) / 7.9), 11rem); line-height: 1.1; font-weight: 700; }
+.ls-mark--fit { font-size: 2.25rem; }
+.ls-mark a, .ls-mark > span { display: inline-block; text-decoration: none; white-space: nowrap; }
+.ls-mark mark { display: inline-block; color: var(--page); background: var(--ink); }
+@media (prefers-reduced-motion: no-preference) {
+  .ls-mark--animate .dot { animation: ls-dot var(--motion-wordmark) .3s steps(1, end) 1 both; }
+  .ls-mark--animate .eye { animation: ls-eye var(--motion-wordmark) .3s steps(1, end) 1 both; }
+}
+@keyframes ls-dot { 0%{transform:translateX(0)} 11.4%{transform:translateX(3ch)} 22.7%{transform:translateX(0)} 31.8%{transform:translateX(3ch)} 40.9%{transform:translateX(0)} 50%{transform:translateX(3ch)} 77.3%,100%{transform:translateX(0)} }
+@keyframes ls-eye { 0%{transform:translateX(0)} 11.4%{transform:translateX(-3ch)} 22.7%{transform:translateX(0)} 31.8%{transform:translateX(-3ch)} 40.9%{transform:translateX(0)} 50%{transform:translateX(-3ch)} 77.3%,100%{transform:translateX(0)} }
+
+/* ---------- Icon ---------- */
+.ls-icon { width: 1.5rem; height: 1.5rem; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: square; stroke-linejoin: miter; }
+.ls-icon--sm { width: 1rem; height: 1rem; }
+
+/* ---------- Button ---------- */
+.ls-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+  min-height: var(--touch-preferred); padding: var(--space-2) var(--space-4);
+  font: 700 1rem/1.5 var(--font-ui); color: var(--ink); text-decoration: none; cursor: pointer;
+  background: var(--page); border: var(--rule); border-radius: 0;
+  transition: background-color var(--motion-state), color var(--motion-state);
+}
+.ls-btn:hover { background: var(--ink); color: var(--page); }
+.ls-btn--primary { color: var(--page); background: var(--ink); }
+.ls-btn--primary:hover { color: var(--ink); background: var(--page); }
+
+.ls-btn--small { min-height: var(--touch-min); font-size: var(--text-secondary); }
+.ls-btn[disabled], .ls-btn[aria-disabled="true"] { color: var(--muted); border: 2px dashed var(--line); background: var(--page); background-image: none; cursor: not-allowed; }
+.ls-btn[disabled]:hover { color: var(--muted); background: var(--page); }
+.ls-btn--outbound::after { content: "\2197"; }
+
+/* ---------- Link ---------- */
+a.ls-out { display: inline-flex; align-items: center; gap: var(--space-1); min-height: var(--touch-min); color: var(--ink); font-weight: 700; text-underline-offset: 4px; overflow-wrap: anywhere; }
+a.ls-out::after { content: "\2197"; font-weight: 700; }
+a.ls-out:hover { text-decoration: underline; text-underline-offset: 4px; }
+
+/* ---------- Tag ---------- */
+.ls-tags { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-2) 0 0; padding: 0; list-style: none; }
+.ls-tag { display: inline-block; padding: 2px var(--space-2); font-size: var(--text-secondary); font-weight: var(--weight-medium); border: 1px solid var(--ink); }
+.ls-tag--role { border-color: var(--crayon-ink); }
+.ls-tag--sample { border-style: dashed; font-weight: 700; }
+
+/* ---------- Card ---------- */
+.ls-card { margin: 0 0 var(--space-5); padding: var(--space-4); border: var(--rule); }
+.ls-card > h3 { margin: 0 0 var(--space-2); }
+.ls-card > :last-child { margin-bottom: 0; }
+.ls-links { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0 0 var(--space-4); padding: 0; list-style: none; }
+
+/* ---------- Print (taped photo) ---------- */
+.ls-print { position: relative; margin: 0; width: min(100%, 320px); padding: var(--space-2) var(--space-2) var(--space-5); background: var(--page); border: var(--rule); transform: rotate(var(--tilt, 0deg)); }
+.ls-print > :is(img, .ls-print__slot) { display: block; width: 100%; height: auto; aspect-ratio: 4 / 3; object-fit: cover; background: var(--line); }
+.ls-print > img { filter: grayscale(1); }
+.ls-print::before { content: ""; position: absolute; top: -14px; left: 50%; width: 88px; height: 26px; margin-left: -44px; transform: rotate(-3deg); background-color: var(--tape); background-image: var(--tape-hatch); border: 1px solid var(--line); }
+@media print { .ls-print { display: none; } }
+
+/* ---------- Fields ---------- */
+.ls-field { display: flex; flex-direction: column; gap: var(--space-1); margin: 0 0 var(--space-4); }
+.ls-field > label, .ls-field > legend { font-weight: 700; }
+.ls-hint { color: var(--muted); font-size: var(--text-secondary); font-weight: var(--weight-medium); }
+.ls-input, .ls-select, .ls-textarea {
+  width: 100%; min-height: var(--touch-preferred); padding: var(--space-2) var(--space-3);
+  font: 400 1rem/1.5 var(--font-ui); color: var(--ink); background: var(--page); border: var(--rule); border-radius: 0;
+}
+.ls-textarea { min-height: 6rem; resize: vertical; }
+.ls-input[aria-invalid="true"] { border-left-width: 8px; }
+.ls-input[disabled], .ls-select[disabled] { color: var(--muted); border: 2px dashed var(--line); }
+.ls-check { display: flex; align-items: center; gap: var(--space-3); min-height: var(--touch-min); }
+.ls-check input { width: 1.5rem; height: 1.5rem; margin: 0; accent-color: var(--ink); }
+
+/* ---------- Callout ---------- */
+.ls-callout { display: flex; gap: var(--space-3); margin: 0 0 var(--space-4); padding: var(--space-3) var(--space-4); border: var(--rule); }
+.ls-callout > div > :last-child { margin-bottom: 0; }
+.ls-callout--error { border-left-width: 8px; }
+.ls-callout--warning { border-style: double; border-width: 5px; }
+.ls-callout--info { border-width: 1px; }
+.ls-vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* ---------- Chip (freshness / status) ---------- */
+.ls-chip { display: inline-flex; align-items: center; gap: var(--space-1); padding: 2px var(--space-2); font-size: var(--text-secondary); font-weight: var(--weight-medium); border: 1px solid var(--ink); }
+.ls-chip--fresh { font-weight: 700; }
+.ls-chip--stale { border: 3px double var(--ink); }
+.ls-chip--unverified { border-style: dashed; }
+
+/* ---------- Receipt ---------- */
+.ls-receipt {
+  position: relative; margin: var(--space-5) 0; padding: var(--space-6) var(--space-4);
+  font: 400 1rem/1.5 var(--font-receipt); color: #111111; background: var(--receipt);
+  box-shadow: 0 2px 0 rgb(0 0 0 / 15%);
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ls-receipt { box-shadow: none; } }
+:root[data-theme="dark"] .ls-receipt { box-shadow: none; }
+.ls-receipt::before, .ls-receipt::after { content: ""; position: absolute; left: 0; right: 0; height: 6px; background: repeating-linear-gradient(90deg, var(--page) 0 6px, transparent 6px 12px); }
+.ls-receipt::before { top: 0; } .ls-receipt::after { bottom: 0; }
+.ls-receipt h3 { margin: 0 0 var(--space-3); text-transform: uppercase; }
+.ls-receipt__row { display: flex; gap: var(--space-2); align-items: baseline; }
+.ls-receipt__row > .name { flex: none; max-width: 70%; overflow-wrap: anywhere; }
+.ls-receipt__row > .lead { flex: 1; min-width: 1rem; border-bottom: 2px dotted #111111; transform: translateY(-4px); }
+.ls-receipt__total { margin-top: var(--space-3); padding-top: var(--space-2); border-top: 5px double #111111; display: flex; justify-content: space-between; font-size: var(--text-total); line-height: var(--leading-total); font-weight: 700; }
+.ls-receipt__stamp { display: inline-block; margin-top: var(--space-3); padding: 0 var(--space-2); border: 3px solid #111111; font-weight: 700; transform: rotate(-6deg); }
+
+/* ---------- Sheet (native dialog) ---------- */
+.ls-sheet { position: fixed; inset: auto 0 0 0; width: min(100%, 592px); max-width: none; max-height: 85dvh; margin: 0 auto; padding: var(--space-4) var(--pad) var(--space-5); color: var(--ink); background: var(--page); border: 0; border-top: var(--rule); border-radius: 0; box-shadow: none; }
+.ls-sheet::backdrop { background: rgb(0 0 0 / 50%); }
+.ls-sheet[open] { animation: ls-sheet var(--motion-sheet) ease-out; }
+@keyframes ls-sheet { from { transform: translateY(24px); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .ls-sheet[open] { animation: none; } }
+.ls-sheet__handle { width: 48px; height: 4px; margin: 0 auto var(--space-4); background: var(--ink); }
+.ls-sheet__head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.ls-sheet__head h2 { margin: 0; padding: 0; border: 0; }
+
+/* ---------- Toast ---------- */
+.ls-toast { display: inline-flex; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-4); color: var(--page); background: var(--ink); font-weight: 700; }
+
+/* ---------- Bottom bar ---------- */
+.ls-bottombar { display: flex; margin: 0; padding: 0 0 env(safe-area-inset-bottom); list-style: none; background: var(--page); border-top: var(--rule); }
+.ls-bottombar > li { flex: 1; }
+.ls-bottombar a, .ls-bottombar button {
+  position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; width: 100%; min-height: 64px; padding: var(--space-2) 0;
+  font: 500 var(--text-small)/1.4 var(--font-ui); color: var(--ink); text-decoration: none; background: none; border: 0; cursor: pointer;
+}
+.ls-bottombar [aria-current="page"] { font-weight: 700; }
+.ls-bottombar [aria-current="page"]::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--ink); }
+
+/* ---------- Draft / placeholder slot ---------- */
+.ls-slot { display: flex; flex-direction: column; justify-content: center; gap: var(--space-1); min-height: 160px; padding: var(--space-4); color: var(--muted); border: 2px dashed var(--line); }
+.ls-slot b { color: var(--ink); }
+
+@media (forced-colors: active) {
+  .ls-mark mark, .ls-fill { background: Mark; color: MarkText; }
+  .ls-print { border-color: CanvasText; }
+}
+
+/* ---------- Status tags and destructive button ---------- */
+.ls-tag--danger, .ls-tag--warning, .ls-tag--success, .ls-tag--info { color: var(--crayon-ink); border: 1px solid var(--crayon-ink); font-weight: 700; }
+.ls-tag--danger { background-color: var(--danger); }
+.ls-tag--warning { background-color: var(--warning); }
+.ls-tag--success { background-color: var(--success); }
+.ls-tag--info { background-color: var(--info); }
+
+/* Destructive: danger fill, dashed edge, triangle icon (added by the component). */
+.ls-btn--danger { color: var(--crayon-ink); background-color: var(--danger); border: 2px dashed var(--crayon-ink); }
+.ls-btn--danger:hover { color: var(--crayon-ink); background-color: var(--danger); text-decoration: underline; text-underline-offset: 4px; }
+
+/* Ink variants: for text and icons on the bare page. Always paired with an icon or word. */
+.ls-ink--danger { color: var(--danger-ink); }
+.ls-ink--success { color: var(--success-ink); }
+.ls-ink--warning { color: var(--warning-ink); }
+.ls-ink--info { color: var(--info-ink); }
+.ls-callout--error > .ls-icon { color: var(--danger-ink); }
+.ls-callout--warning > .ls-icon { color: var(--warning-ink); }
+.ls-callout--info > .ls-icon { color: var(--info-ink); }
+.ls-callout--success > .ls-icon { color: var(--success-ink); }
+.ls-callout--error, .ls-callout--warning, .ls-callout--info, .ls-callout--success { font-weight: var(--weight-medium); }
+
+.ls-input:disabled, .ls-select:disabled { cursor: not-allowed; }
